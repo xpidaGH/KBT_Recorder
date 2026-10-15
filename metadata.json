@@ -1,0 +1,6 @@
+{
+  "name": "KBT_Recorder Pro Studio & Capstone Ecosystem",
+  "description": "Professional multi-cloud voice recorder with real-time DSP, VU metering, offline zero-knowledge encryption, audio editor, and 21-language international capstone architecture.",
+  "requestFramePermissions": ["microphone", "geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
