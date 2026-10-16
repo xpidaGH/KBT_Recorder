@@ -1,18 +1,29 @@
-import React, { useEffect, useRef } from 'react';
-import { DSPSettings } from '../types/recorder';
-import { DSP_PRESETS, DSPPreset, computeFrequencyResponse } from '../utils/dspEngine';
+import React, { useEffect, useRef, useState, useMemo } from 'react';
+import { DSPSettings, SpectralSubtractionSettings } from '../types/recorder';
 import {
-  Sliders,
+  DSP_PRESETS,
+  DSPPreset,
+  computeFrequencyResponse,
+  captureNoiseProfile,
+  autoEstimateNoiseProfile
+} from '../utils/dspEngine';
+import {
   Volume2,
   VolumeX,
   RotateCcw,
   Sparkles,
   Activity,
   Layers,
-  Info,
-  Check,
   Disc,
-  Filter
+  Wand2,
+  Play,
+  Square,
+  Cpu,
+  RefreshCw,
+  Scissors,
+  CheckCircle2,
+  Info,
+  Sliders
 } from 'lucide-react';
 
 interface DSPFilterPanelProps {
@@ -20,17 +31,44 @@ interface DSPFilterPanelProps {
   onChange: (newSettings: DSPSettings) => void;
   onApplyAndExport?: () => void;
   isProcessing?: boolean;
+  audioBuffer?: AudioBuffer | null;
+  selectionRange?: { startSec: number; endSec: number };
+  onPreviewToggle?: () => void;
+  isPreviewPlaying?: boolean;
+  onApplyCleanToEditor?: () => void;
 }
 
 export const DSPFilterPanel: React.FC<DSPFilterPanelProps> = ({
   settings,
   onChange,
   onApplyAndExport,
-  isProcessing = false
+  isProcessing = false,
+  audioBuffer,
+  selectionRange,
+  onPreviewToggle,
+  isPreviewPlaying = false,
+  onApplyCleanToEditor
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const profileCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
-  // Update helper
+  const [profilerFeedback, setProfilerFeedback] = useState<string | null>(null);
+
+  // Safe fallback for spectral subtraction settings
+  const spectralSettings: SpectralSubtractionSettings = useMemo(() => {
+    return (
+      settings.spectralSubtraction || {
+        enabled: false,
+        strengthAlpha: 1.8,
+        noiseFloorBeta: 0.02,
+        spectralSmoothing: 0.35,
+        fftSize: 1024,
+        noiseProfileMode: 'auto_silence'
+      }
+    );
+  }, [settings.spectralSubtraction]);
+
+  // Update helpers
   const updateSetting = <K extends keyof DSPSettings>(key: K, value: DSPSettings[K]) => {
     onChange({
       ...settings,
@@ -68,6 +106,109 @@ export const DSPFilterPanel: React.FC<DSPFilterPanelProps> = ({
     });
   };
 
+  const updateSpectral = (field: keyof SpectralSubtractionSettings, value: any) => {
+    onChange({
+      ...settings,
+      spectralSubtraction: {
+        ...spectralSettings,
+        [field]: value
+      }
+    });
+  };
+
+  // Capture noise profile from current selection range [startSec, endSec]
+  const handleCaptureSelectionProfile = () => {
+    if (!audioBuffer) {
+      setProfilerFeedback('No audio loaded in editor to sample.');
+      setTimeout(() => setProfilerFeedback(null), 3000);
+      return;
+    }
+
+    try {
+      const channel = audioBuffer.getChannelData(0);
+      const start = selectionRange?.startSec ?? 0;
+      const end = selectionRange?.endSec ?? Math.min(0.6, audioBuffer.duration);
+      const duration = Math.max(0.08, end - start);
+
+      const profile = captureNoiseProfile(
+        channel,
+        audioBuffer.sampleRate,
+        spectralSettings.fftSize || 1024,
+        start,
+        duration
+      );
+
+      onChange({
+        ...settings,
+        spectralSubtraction: {
+          ...spectralSettings,
+          enabled: true,
+          capturedProfile: profile,
+          noiseProfileMode: 'selection'
+        }
+      });
+
+      setProfilerFeedback(
+        `Noise profile sampled from ${start.toFixed(2)}s - ${end.toFixed(2)}s (${profile.length} FFT bins)`
+      );
+      setTimeout(() => setProfilerFeedback(null), 3500);
+    } catch (e) {
+      console.error(e);
+      setProfilerFeedback('Failed to sample noise profile from selection.');
+      setTimeout(() => setProfilerFeedback(null), 3000);
+    }
+  };
+
+  // Auto-detect noise profile from quiet pauses / silence
+  const handleAutoEstimateProfile = () => {
+    if (!audioBuffer) {
+      setProfilerFeedback('No audio loaded in editor to analyze.');
+      setTimeout(() => setProfilerFeedback(null), 3000);
+      return;
+    }
+
+    try {
+      const channel = audioBuffer.getChannelData(0);
+      const profile = autoEstimateNoiseProfile(
+        channel,
+        audioBuffer.sampleRate,
+        spectralSettings.fftSize || 1024
+      );
+
+      onChange({
+        ...settings,
+        spectralSubtraction: {
+          ...spectralSettings,
+          enabled: true,
+          capturedProfile: profile,
+          noiseProfileMode: 'auto_silence'
+        }
+      });
+
+      setProfilerFeedback(
+        `Auto-detected room noise profile across quiet intervals (${profile.length} bins)`
+      );
+      setTimeout(() => setProfilerFeedback(null), 3500);
+    } catch (e) {
+      console.error(e);
+      setProfilerFeedback('Failed to auto-estimate noise profile.');
+      setTimeout(() => setProfilerFeedback(null), 3000);
+    }
+  };
+
+  // Clear captured noise profile to revert to adaptive mode
+  const handleClearProfile = () => {
+    const updated = { ...spectralSettings };
+    delete updated.capturedProfile;
+    updated.noiseProfileMode = 'auto_silence';
+    onChange({
+      ...settings,
+      spectralSubtraction: updated
+    });
+    setProfilerFeedback('Reverted to dynamic adaptive noise estimation.');
+    setTimeout(() => setProfilerFeedback(null), 3000);
+  };
+
   // Preset selector
   const handleApplyPreset = (preset: DSPPreset) => {
     onChange({
@@ -81,7 +222,10 @@ export const DSPFilterPanel: React.FC<DSPFilterPanelProps> = ({
         : settings.lowPass,
       noiseReduction: preset.settings.noiseReduction
         ? { ...settings.noiseReduction, ...preset.settings.noiseReduction }
-        : settings.noiseReduction
+        : settings.noiseReduction,
+      spectralSubtraction: preset.settings.spectralSubtraction
+        ? { ...spectralSettings, ...preset.settings.spectralSubtraction }
+        : spectralSettings
     });
   };
 
@@ -92,6 +236,14 @@ export const DSPFilterPanel: React.FC<DSPFilterPanelProps> = ({
       highPass: { enabled: false, frequency: 80, q: 0.707 },
       lowPass: { enabled: false, frequency: 6000, q: 0.707 },
       noiseReduction: { enabled: false, thresholdDb: -36, reductionDb: 24, attackMs: 10, releaseMs: 150 },
+      spectralSubtraction: {
+        enabled: false,
+        strengthAlpha: 1.8,
+        noiseFloorBeta: 0.02,
+        spectralSmoothing: 0.35,
+        fftSize: 1024,
+        noiseProfileMode: 'auto_silence'
+      },
       outputGainDb: 0
     });
   };
@@ -139,15 +291,15 @@ export const DSPFilterPanel: React.FC<DSPFilterPanelProps> = ({
       ctx.strokeStyle = db === 0 ? '#334155' : '#1e293b';
       ctx.lineWidth = db === 0 ? 1.5 : 1;
       ctx.beginPath();
-      ctx.moveTo(0, y);
+      ctx.moveTo(35, y);
       ctx.lineTo(width, y);
       ctx.stroke();
 
       ctx.fillStyle = db === 0 ? '#94a3b8' : '#475569';
-      ctx.fillText(`${db > 0 ? '+' : ''}${db}dB`, width - 6, y - 3);
+      ctx.fillText(`${db > 0 ? `+${db}` : db}dB`, 30, y + 3);
     }
 
-    // Draw vertical frequency grid lines
+    // Vertical frequency grid lines
     const gridFreqs = [50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000];
     ctx.textAlign = 'center';
     for (const freq of gridFreqs) {
@@ -156,145 +308,172 @@ export const DSPFilterPanel: React.FC<DSPFilterPanelProps> = ({
       ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.moveTo(x, 0);
-      ctx.lineTo(x, height);
+      ctx.lineTo(x, height - 16);
       ctx.stroke();
 
+      ctx.fillStyle = '#475569';
       const label = freq >= 1000 ? `${freq / 1000}k` : `${freq}`;
-      ctx.fillStyle = '#64748b';
-      ctx.fillText(label, x, height - 6);
+      ctx.fillText(label, x, height - 5);
     }
 
-    // Generate frequency sample points across width
-    const sampleCount = Math.floor(width / 2);
-    const freqs = new Float32Array(sampleCount);
-    for (let i = 0; i < sampleCount; i++) {
-      const ratio = i / (sampleCount - 1);
-      const logF = logMin + ratio * (logMax - logMin);
-      freqs[i] = Math.pow(10, logF);
+    // Compute frequency response curve
+    const steps = 180;
+    const testFreqs = new Float32Array(steps);
+    for (let i = 0; i < steps; i++) {
+      const logF = logMin + (i / (steps - 1)) * (logMax - logMin);
+      testFreqs[i] = Math.pow(10, logF);
     }
 
-    const { combinedDb, hpDb, lpDb } = computeFrequencyResponse(freqs, settings);
+    const { combinedDb, hpDb, lpDb } = computeFrequencyResponse(testFreqs, settings);
 
-    // 1. Draw High-Pass individual curve if active
+    // Draw High-Pass Curve (Amber)
     if (settings.highPass.enabled && !settings.bypassAll) {
-      ctx.strokeStyle = 'rgba(245, 158, 11, 0.45)'; // Amber
+      ctx.strokeStyle = 'rgba(251, 191, 36, 0.4)';
       ctx.lineWidth = 1.5;
       ctx.beginPath();
-      for (let i = 0; i < sampleCount; i++) {
-        const x = freqToX(freqs[i]);
+      for (let i = 0; i < steps; i++) {
+        const x = freqToX(testFreqs[i]);
         const y = dbToY(hpDb[i]);
         if (i === 0) ctx.moveTo(x, y);
         else ctx.lineTo(x, y);
       }
       ctx.stroke();
-
-      // Cutoff marker
-      const hpX = freqToX(settings.highPass.frequency);
-      ctx.strokeStyle = '#f59e0b';
-      ctx.setLineDash([3, 3]);
-      ctx.beginPath();
-      ctx.moveTo(hpX, 0);
-      ctx.lineTo(hpX, height);
-      ctx.stroke();
-      ctx.setLineDash([]);
     }
 
-    // 2. Draw Low-Pass individual curve if active
+    // Draw Low-Pass Curve (Sky)
     if (settings.lowPass.enabled && !settings.bypassAll) {
-      ctx.strokeStyle = 'rgba(56, 189, 248, 0.45)'; // Sky
+      ctx.strokeStyle = 'rgba(56, 189, 248, 0.4)';
       ctx.lineWidth = 1.5;
       ctx.beginPath();
-      for (let i = 0; i < sampleCount; i++) {
-        const x = freqToX(freqs[i]);
+      for (let i = 0; i < steps; i++) {
+        const x = freqToX(testFreqs[i]);
         const y = dbToY(lpDb[i]);
         if (i === 0) ctx.moveTo(x, y);
         else ctx.lineTo(x, y);
       }
       ctx.stroke();
-
-      // Cutoff marker
-      const lpX = freqToX(settings.lowPass.frequency);
-      ctx.strokeStyle = '#38bdf8';
-      ctx.setLineDash([3, 3]);
-      ctx.beginPath();
-      ctx.moveTo(lpX, 0);
-      ctx.lineTo(lpX, height);
-      ctx.stroke();
-      ctx.setLineDash([]);
     }
 
-    // 3. Draw Combined Composite Response Curve with Gradient Fill
+    // Draw Composite Frequency Response (Emerald line with gradient fill)
+    ctx.strokeStyle = settings.bypassAll ? '#64748b' : '#10b981';
     ctx.lineWidth = 2.5;
-    ctx.strokeStyle = settings.bypassAll ? '#64748b' : '#10b981'; // Emerald when active, slate when bypassed
-
     ctx.beginPath();
-    for (let i = 0; i < sampleCount; i++) {
-      const x = freqToX(freqs[i]);
+    for (let i = 0; i < steps; i++) {
+      const x = freqToX(testFreqs[i]);
       const y = dbToY(combinedDb[i]);
       if (i === 0) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
     }
     ctx.stroke();
 
-    // Fill underneath curve
-    ctx.lineTo(width, height);
-    ctx.lineTo(0, height);
+    // Area fill under composite
+    ctx.lineTo(width, height - 16);
+    ctx.lineTo(freqToX(testFreqs[0]), height - 16);
     ctx.closePath();
     const grad = ctx.createLinearGradient(0, 0, 0, height);
-    grad.addColorStop(0, settings.bypassAll ? 'rgba(100, 116, 139, 0.12)' : 'rgba(16, 185, 129, 0.18)');
-    grad.addColorStop(1, 'rgba(16, 185, 129, 0.0)');
+    if (settings.bypassAll) {
+      grad.addColorStop(0, 'rgba(100, 116, 139, 0.15)');
+      grad.addColorStop(1, 'rgba(100, 116, 139, 0)');
+    } else {
+      grad.addColorStop(0, 'rgba(16, 185, 129, 0.25)');
+      grad.addColorStop(1, 'rgba(16, 185, 129, 0)');
+    }
     ctx.fillStyle = grad;
     ctx.fill();
 
-    // Zero dB reference marker text
-    ctx.fillStyle = '#10b981';
-    ctx.textAlign = 'left';
-    ctx.font = '10px monospace font-semibold';
-    ctx.fillText(
-      settings.bypassAll
-        ? 'BYPASS (Flat 0 dB)'
-        : `EQ OUT: ${settings.outputGainDb >= 0 ? '+' : ''}${settings.outputGainDb} dB`,
-      12,
-      18
-    );
+    // Cutoff markers
+    if (settings.highPass.enabled && !settings.bypassAll) {
+      const hpX = freqToX(settings.highPass.frequency);
+      ctx.fillStyle = '#fbbf24';
+      ctx.beginPath();
+      ctx.arc(hpX, dbToY(-3), 4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    if (settings.lowPass.enabled && !settings.bypassAll) {
+      const lpX = freqToX(settings.lowPass.frequency);
+      ctx.fillStyle = '#38bdf8';
+      ctx.beginPath();
+      ctx.arc(lpX, dbToY(-3), 4, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }, [settings]);
 
-  const activeFiltersCount =
-    (settings.highPass.enabled ? 1 : 0) +
-    (settings.lowPass.enabled ? 1 : 0) +
-    (settings.noiseReduction.enabled ? 1 : 0);
+  // Draw Noise Profile Spectrum Canvas
+  useEffect(() => {
+    const canvas = profileCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const width = canvas.width;
+    const height = canvas.height;
+
+    ctx.fillStyle = '#0a0f1d';
+    ctx.fillRect(0, 0, width, height);
+
+    const profile = spectralSettings.capturedProfile;
+    if (!profile || profile.length === 0) {
+      // Draw simulated adaptive noise floor placeholder
+      ctx.fillStyle = '#334155';
+      ctx.font = '10px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText('Dynamic Auto-Adaptive Noise Profile Active', width / 2, height / 2 - 4);
+      ctx.fillStyle = '#475569';
+      ctx.font = '9px monospace';
+      ctx.fillText('(Click "Auto-Detect Silence Profile" or "Sample Selection" to lock noise profile)', width / 2, height / 2 + 10);
+      return;
+    }
+
+    const bins = profile.length;
+    let maxMag = 1e-4;
+    for (let i = 0; i < bins; i++) {
+      if (profile[i] > maxMag) maxMag = profile[i];
+    }
+
+    // Draw spectrum bars
+    const barWidth = Math.max(1, width / bins);
+    const grad = ctx.createLinearGradient(0, 0, 0, height);
+    grad.addColorStop(0, '#a855f7');
+    grad.addColorStop(1, '#6366f1');
+
+    ctx.fillStyle = grad;
+    for (let i = 0; i < bins; i++) {
+      const normalized = Math.min(1, Math.pow(profile[i] / maxMag, 0.6));
+      const barHeight = normalized * (height - 12);
+      const x = i * barWidth;
+      const y = height - barHeight;
+      ctx.fillRect(x, y, barWidth - 0.5, barHeight);
+    }
+
+    // Top frequency annotations
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '8px monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText('0 Hz', 4, 10);
+    ctx.textAlign = 'center';
+    ctx.fillText('5 kHz', width / 2, 10);
+    ctx.textAlign = 'right';
+    ctx.fillText('20 kHz', width - 4, 10);
+  }, [spectralSettings.capturedProfile]);
 
   return (
-    <div className="flex flex-col gap-5 text-slate-200">
-      {/* Top DSP Header / Master Status & Presets */}
-      <div className="bg-slate-950/90 border border-slate-800 p-4 rounded-xl flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-sm">
-        <div className="flex items-center gap-3">
-          <div
-            className={`w-10 h-10 rounded-xl flex items-center justify-center border transition-colors ${
-              settings.bypassAll
-                ? 'bg-slate-800 text-slate-400 border-slate-700'
-                : 'bg-emerald-950/80 text-emerald-400 border-emerald-700/80'
-            }`}
-          >
-            <Filter className="w-5 h-5" />
+    <div className="flex flex-col gap-5">
+      {/* Header Bar */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pb-3 border-b border-slate-800">
+        <div>
+          <div className="flex items-center gap-2">
+            <Sliders className="w-5 h-5 text-sky-400" />
+            <h3 className="text-sm font-bold text-white uppercase tracking-wider">
+              Acoustic DSP Studio & Spectral Clean
+            </h3>
+            <span className="text-[10px] bg-sky-950 text-sky-400 border border-sky-800/60 px-2 py-0.5 rounded-full font-mono">
+              Web Audio & FFT Engine
+            </span>
           </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <h3 className="text-sm font-bold text-white">DSP Filter Studio & Noise Reduction</h3>
-              <span
-                className={`text-[10px] px-2 py-0.5 rounded-full font-mono font-semibold uppercase tracking-wider ${
-                  settings.bypassAll
-                    ? 'bg-amber-950/80 text-amber-300 border border-amber-800'
-                    : 'bg-emerald-950/80 text-emerald-300 border border-emerald-800'
-                }`}
-              >
-                {settings.bypassAll ? 'Bypassed' : `${activeFiltersCount} Active`}
-              </span>
-            </div>
-            <p className="text-xs text-slate-400 mt-0.5">
-              Live auditioning and offline PCM filtering with noise suppression, low-cut, and high-cut
-            </p>
-          </div>
+          <p className="text-xs text-slate-400 mt-1">
+            Real-time biquad filtering, spectral subtraction background noise removal, and dynamic envelope gating.
+          </p>
         </div>
 
         {/* Master Bypass & Reset Buttons */}
@@ -328,7 +507,7 @@ export const DSPFilterPanel: React.FC<DSPFilterPanelProps> = ({
       {/* Quick Presets Strip */}
       <div className="flex flex-col gap-1.5">
         <span className="text-[11px] font-mono uppercase tracking-wider text-slate-400 font-semibold px-1">
-          Acoustic Filter Presets:
+          Acoustic & Noise Removal Presets:
         </span>
         <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-thin">
           {DSP_PRESETS.map((p) => (
@@ -376,6 +555,306 @@ export const DSPFilterPanel: React.FC<DSPFilterPanelProps> = ({
         </div>
       </div>
 
+      {/* PREMIER FEATURE: Background Noise Removal (Spectral Subtraction) */}
+      <div
+        className={`p-4 rounded-xl border transition-all flex flex-col gap-4 ${
+          spectralSettings.enabled && !settings.bypassAll
+            ? 'bg-slate-900/95 border-purple-500/60 shadow-lg shadow-purple-950/25 ring-1 ring-purple-500/30'
+            : 'bg-slate-950/60 border-slate-800 opacity-85'
+        }`}
+      >
+        {/* Module Header */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2.5">
+            <div
+              className={`w-8 h-8 rounded-lg flex items-center justify-center font-mono font-bold text-xs ${
+                spectralSettings.enabled && !settings.bypassAll
+                  ? 'bg-purple-500/20 text-purple-300 border border-purple-500/50'
+                  : 'bg-slate-800 text-slate-500'
+              }`}
+            >
+              <Wand2 className="w-4 h-4 text-purple-400" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-bold text-white block">Background Noise Removal</span>
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-purple-950 text-purple-300 border border-purple-800/70 font-mono font-medium">
+                  Spectral Subtraction STFT
+                </span>
+              </div>
+              <span className="text-[11px] text-slate-400">
+                Transforms audio into frequency bins and subtracts stationary room air, AC hum, and fan buzz without muffling speech
+              </span>
+            </div>
+          </div>
+
+          {/* Toggle Switch */}
+          <button
+            type="button"
+            onClick={() => updateSpectral('enabled', !spectralSettings.enabled)}
+            className={`w-12 h-6 rounded-full transition-colors p-0.5 cursor-pointer flex items-center shrink-0 ${
+              spectralSettings.enabled ? 'bg-purple-600 justify-end' : 'bg-slate-800 justify-start'
+            }`}
+            title={spectralSettings.enabled ? 'Disable Spectral Subtraction' : 'Enable Spectral Subtraction'}
+          >
+            <div className="w-5 h-5 rounded-full bg-white shadow-sm" />
+          </button>
+        </div>
+
+        {/* Profiler Feedback Alert */}
+        {profilerFeedback && (
+          <div className="px-3 py-2 bg-purple-950/60 border border-purple-700/80 rounded-lg text-xs text-purple-200 flex items-center gap-2 animate-fadeIn">
+            <CheckCircle2 className="w-4 h-4 text-purple-400 shrink-0" />
+            <span>{profilerFeedback}</span>
+          </div>
+        )}
+
+        {/* Noise Profile Profiler Toolbar */}
+        <div className="bg-slate-950/90 p-3 rounded-lg border border-slate-800 flex flex-col gap-2.5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <Cpu className="w-4 h-4 text-purple-400" />
+              <span className="text-xs font-semibold text-slate-200">Noise Profile Fingerprint:</span>
+              <span
+                className={`text-[10px] px-2 py-0.5 rounded font-mono font-medium ${
+                  spectralSettings.capturedProfile
+                    ? 'bg-purple-950 text-purple-300 border border-purple-700'
+                    : 'bg-slate-800 text-slate-400 border border-slate-700'
+                }`}
+              >
+                {spectralSettings.capturedProfile
+                  ? `Locked (${spectralSettings.capturedProfile.length} bins, ${spectralSettings.noiseProfileMode})`
+                  : 'Auto-Adaptive (Silence Tracking)'}
+              </span>
+            </div>
+
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <button
+                type="button"
+                onClick={handleAutoEstimateProfile}
+                disabled={!audioBuffer}
+                className="px-2.5 py-1 bg-purple-900/40 hover:bg-purple-800/60 border border-purple-700/70 text-purple-200 rounded-md text-[11px] font-medium transition-colors flex items-center gap-1 cursor-pointer disabled:opacity-40"
+                title="Automatically detect noise from quiet pauses across the recording"
+              >
+                <RefreshCw className="w-3 h-3 text-purple-300" />
+                <span>Auto-Detect Silence Profile</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleCaptureSelectionProfile}
+                disabled={!audioBuffer}
+                className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 rounded-md text-[11px] font-medium transition-colors flex items-center gap-1 cursor-pointer disabled:opacity-40"
+                title="Capture noise footprint specifically from the selected range in timeline"
+              >
+                <Scissors className="w-3 h-3 text-slate-300" />
+                <span>Sample Selection [A..B]</span>
+              </button>
+
+              {spectralSettings.capturedProfile && (
+                <button
+                  type="button"
+                  onClick={handleClearProfile}
+                  className="px-2 py-1 bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-slate-200 rounded-md text-[11px] transition-colors cursor-pointer"
+                  title="Clear captured profile and return to adaptive silence estimation"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Mini Noise Spectrum Preview Canvas */}
+          <div className="relative w-full h-12 bg-[#0a0f1d] rounded border border-slate-800/80 overflow-hidden">
+            <canvas
+              ref={profileCanvasRef}
+              width={540}
+              height={48}
+              className="w-full h-full block"
+            />
+          </div>
+        </div>
+
+        {/* Algorithm Controls Grid */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* Slider 1: Subtraction Strength (Alpha) */}
+          <div className="flex flex-col gap-1.5">
+            <div className="flex items-center justify-between text-xs">
+              <div className="flex items-center gap-1.5">
+                <span className="text-slate-300 font-semibold">Subtraction Factor (α):</span>
+                <span className="text-[10px] text-slate-400 font-mono">(Noise Attenuation)</span>
+              </div>
+              <span className="font-mono text-purple-400 font-bold">
+                {spectralSettings.strengthAlpha.toFixed(1)}x
+              </span>
+            </div>
+            <input
+              type="range"
+              min="0.5"
+              max="4.0"
+              step="0.1"
+              value={spectralSettings.strengthAlpha}
+              disabled={!spectralSettings.enabled}
+              onChange={(e) => updateSpectral('strengthAlpha', Number(e.target.value))}
+              className="w-full accent-purple-500 cursor-pointer disabled:opacity-40"
+            />
+            {/* Quick buttons */}
+            <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+              {[
+                { val: 1.0, label: '1.0x (Gentle)' },
+                { val: 1.8, label: '1.8x (Balanced)' },
+                { val: 2.6, label: '2.6x (Heavy Air)' },
+                { val: 3.5, label: '3.5x (Max Cut)' }
+              ].map((opt) => (
+                <button
+                  key={opt.val}
+                  type="button"
+                  disabled={!spectralSettings.enabled}
+                  onClick={() => updateSpectral('strengthAlpha', opt.val)}
+                  className={`text-[10px] px-2 py-0.5 rounded font-mono transition-colors cursor-pointer border ${
+                    Math.abs(spectralSettings.strengthAlpha - opt.val) < 0.05
+                      ? 'bg-purple-950 text-purple-300 border-purple-600 font-bold'
+                      : 'bg-slate-850 text-slate-400 hover:text-slate-200 border-slate-700/80 disabled:opacity-40'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Slider 2: Spectral Floor (Beta) to prevent musical noise */}
+          <div className="flex flex-col gap-1.5">
+            <div className="flex items-center justify-between text-xs">
+              <div className="flex items-center gap-1.5">
+                <span className="text-slate-300 font-semibold">Spectral Floor (β):</span>
+                <span className="text-[10px] text-slate-400 font-mono">(Anti-Musical Chirp)</span>
+              </div>
+              <span className="font-mono text-purple-400 font-bold">
+                {(spectralSettings.noiseFloorBeta * 100).toFixed(1)}%
+              </span>
+            </div>
+            <input
+              type="range"
+              min="0.005"
+              max="0.12"
+              step="0.005"
+              value={spectralSettings.noiseFloorBeta}
+              disabled={!spectralSettings.enabled}
+              onChange={(e) => updateSpectral('noiseFloorBeta', Number(e.target.value))}
+              className="w-full accent-purple-500 cursor-pointer disabled:opacity-40"
+            />
+            <div className="flex justify-between text-[10px] text-slate-500 font-mono">
+              <span>0.5% (Deep Cut)</span>
+              <span className="text-purple-400/80">2.0% (Natural Floor)</span>
+              <span>12% (Zero Artifacts)</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Secondary parameters: Smoothing & FFT Size */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2 border-t border-slate-800/60 text-xs">
+          {/* Temporal Frame Smoothing */}
+          <div className="flex flex-col gap-1.5">
+            <div className="flex items-center justify-between">
+              <span className="text-slate-400">Inter-Frame Temporal Smoothing:</span>
+              <span className="font-mono text-slate-300 font-bold">
+                {Math.round(spectralSettings.spectralSmoothing * 100)}%
+              </span>
+            </div>
+            <input
+              type="range"
+              min="0.0"
+              max="0.8"
+              step="0.05"
+              value={spectralSettings.spectralSmoothing}
+              disabled={!spectralSettings.enabled}
+              onChange={(e) => updateSpectral('spectralSmoothing', Number(e.target.value))}
+              className="w-full accent-purple-500 cursor-pointer disabled:opacity-40"
+            />
+            <span className="text-[10px] text-slate-500">
+              Smooths spectral changes across consecutive frames to prevent isolated watery artifacts.
+            </span>
+          </div>
+
+          {/* FFT Window Resolution */}
+          <div className="flex flex-col gap-1.5">
+            <div className="flex items-center justify-between">
+              <span className="text-slate-400">FFT Window Size:</span>
+              <span className="font-mono text-slate-300 font-bold">
+                {spectralSettings.fftSize || 1024} bins
+              </span>
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              {[
+                { size: 512, label: '512 (11.6ms)' },
+                { size: 1024, label: '1024 (23.2ms)' },
+                { size: 2048, label: '2048 (46.4ms)' }
+              ].map((opt) => (
+                <button
+                  key={opt.size}
+                  type="button"
+                  disabled={!spectralSettings.enabled}
+                  onClick={() => updateSpectral('fftSize', opt.size)}
+                  className={`py-1 rounded-md text-[11px] font-mono transition-colors border cursor-pointer ${
+                    (spectralSettings.fftSize || 1024) === opt.size
+                      ? 'bg-purple-950 text-purple-300 border-purple-600 font-bold'
+                      : 'bg-slate-850 text-slate-400 hover:text-slate-200 border-slate-750 disabled:opacity-40'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+            <span className="text-[10px] text-slate-500">
+              1024 is optimal for human voice. 2048 gives sharper frequency resolution for low AC hums.
+            </span>
+          </div>
+        </div>
+
+        {/* Audition & Clean Action Bar */}
+        {(onPreviewToggle || onApplyCleanToEditor) && (
+          <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-800/60 bg-purple-950/20 p-2.5 rounded-lg border border-purple-900/30">
+            <div className="flex items-center gap-2">
+              <Info className="w-3.5 h-3.5 text-purple-400 shrink-0" />
+              <span className="text-[11px] text-purple-200">
+                Audition or apply spectral subtraction directly to clean background noise in the editor
+              </span>
+            </div>
+
+            <div className="flex items-center gap-2">
+              {onPreviewToggle && (
+                <button
+                  type="button"
+                  onClick={onPreviewToggle}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer border ${
+                    isPreviewPlaying
+                      ? 'bg-amber-600 text-white border-amber-500 shadow-md'
+                      : 'bg-purple-600 hover:bg-purple-500 text-white border-purple-500 shadow-sm'
+                  }`}
+                >
+                  {isPreviewPlaying ? <Square className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
+                  <span>{isPreviewPlaying ? 'Stop Preview' : 'Audition Clean Audio'}</span>
+                </button>
+              )}
+
+              {onApplyCleanToEditor && (
+                <button
+                  type="button"
+                  onClick={onApplyCleanToEditor}
+                  disabled={isProcessing}
+                  className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer shadow-sm disabled:opacity-50"
+                  title="Applies spectral subtraction directly into active timeline audio buffer"
+                >
+                  <Wand2 className="w-3.5 h-3.5" />
+                  <span>Apply Clean to Audio</span>
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* Filter Modules Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {/* Module 1: High-Pass Filter (Low Cut) */}
@@ -399,7 +878,7 @@ export const DSPFilterPanel: React.FC<DSPFilterPanelProps> = ({
               </div>
               <div>
                 <span className="text-xs font-bold text-white block">High-Pass (Low-Cut) Filter</span>
-                <span className="text-[11px] text-slate-400">Removes mic wind, desk thumps & low hum</span>
+                <span className="text-[11px] text-slate-400">Cuts handling thumps, mic wind, and AC sub-bass</span>
               </div>
             </div>
 
@@ -425,7 +904,7 @@ export const DSPFilterPanel: React.FC<DSPFilterPanelProps> = ({
               type="range"
               min="20"
               max="1500"
-              step="5"
+              step="10"
               value={settings.highPass.frequency}
               disabled={!settings.highPass.enabled}
               onChange={(e) => updateHighPass('frequency', Number(e.target.value))}
@@ -433,7 +912,7 @@ export const DSPFilterPanel: React.FC<DSPFilterPanelProps> = ({
             />
             {/* Quick Presets */}
             <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
-              {[60, 80, 120, 180, 320].map((freq) => (
+              {[40, 80, 120, 160, 240].map((freq) => (
                 <button
                   key={freq}
                   type="button"
@@ -587,9 +1066,9 @@ export const DSPFilterPanel: React.FC<DSPFilterPanelProps> = ({
               NR
             </div>
             <div>
-              <span className="text-xs font-bold text-white block">Noise Reduction & Dynamic Gate</span>
+              <span className="text-xs font-bold text-white block">Noise Gate & Envelope Gating</span>
               <span className="text-[11px] text-slate-400">
-                Smoothly suppresses background air, hiss, and AC noise during pauses
+                Smoothly silences residual background air and room hum during pauses
               </span>
             </div>
           </div>
@@ -729,7 +1208,7 @@ export const DSPFilterPanel: React.FC<DSPFilterPanelProps> = ({
           <div>
             <span className="font-bold text-white block">Render & Export DSP Processed Audio</span>
             <span className="text-slate-400">
-              Applies noise reduction, low-pass, and high-pass filters directly into high-fidelity uncompressed WAV.
+              Applies spectral subtraction noise removal, low-pass, and high-pass filters directly into high-fidelity uncompressed WAV.
             </span>
           </div>
           <button

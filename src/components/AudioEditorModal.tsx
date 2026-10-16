@@ -84,11 +84,13 @@ export const AudioEditorModal: React.FC<AudioEditorModalProps> = ({
 
   // DSP Filter Settings State
   const [dspSettings, setDspSettings] = useState<DSPSettings>(item.dspFilters || DEFAULT_DSP_SETTINGS);
+  const [isPlayingCleanPreview, setIsPlayingCleanPreview] = useState(false);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const timelineCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const activeSourceRef = useRef<AudioBufferSourceNode | null>(null);
+  const cleanPreviewSourceRef = useRef<AudioBufferSourceNode | null>(null);
   const liveHpFilterRef = useRef<BiquadFilterNode | null>(null);
   const liveLpFilterRef = useRef<BiquadFilterNode | null>(null);
   const liveGainRef = useRef<GainNode | null>(null);
@@ -155,6 +157,9 @@ export const AudioEditorModal: React.FC<AudioEditorModalProps> = ({
       cancelled = true;
       if (activeSourceRef.current) {
         try { activeSourceRef.current.stop(); } catch (e) { /* ignore */ }
+      }
+      if (cleanPreviewSourceRef.current) {
+        try { cleanPreviewSourceRef.current.stop(); } catch (e) { /* ignore */ }
       }
       if (playheadAnimRef.current) cancelAnimationFrame(playheadAnimRef.current);
       if (audioContextRef.current) audioContextRef.current.close();
@@ -624,6 +629,117 @@ export const AudioEditorModal: React.FC<AudioEditorModalProps> = ({
       setHasUnsavedChanges(false);
       setMetadataFeedback('Metadata, tags & DSP settings saved successfully to Vault!');
       setTimeout(() => setMetadataFeedback(null), 3000);
+    }
+  };
+
+  // Preview / Audition Spectral Subtraction Clean Audio
+  const handlePreviewSpectralClean = async () => {
+    if (!audioBuffer || !audioContextRef.current) return;
+    const ctx = audioContextRef.current;
+    if (ctx.state === 'suspended') await ctx.resume();
+
+    // If currently playing preview, stop it
+    if (isPlayingCleanPreview) {
+      if (cleanPreviewSourceRef.current) {
+        try { cleanPreviewSourceRef.current.stop(); } catch (e) { /* ignore */ }
+        cleanPreviewSourceRef.current = null;
+      }
+      setIsPlayingCleanPreview(false);
+      return;
+    }
+
+    // Stop standard playback if running
+    if (activeSourceRef.current) {
+      try { activeSourceRef.current.stop(); } catch (e) { /* ignore */ }
+      activeSourceRef.current = null;
+      setIsPlaying(false);
+    }
+
+    setIsProcessing(true);
+    try {
+      const rendered = await renderDSPAudioBuffer(audioBuffer, dspSettings);
+      const source = ctx.createBufferSource();
+      source.buffer = rendered;
+
+      const gain = ctx.createGain();
+      gain.gain.setValueAtTime(1.0, ctx.currentTime);
+      source.connect(gain);
+      gain.connect(ctx.destination);
+
+      const offset = Math.max(0, Math.min(currentTime, audioBuffer.duration));
+      const dur = Math.max(0.1, (endSec || audioBuffer.duration) - offset);
+      source.start(0, offset, dur);
+
+      cleanPreviewSourceRef.current = source;
+      setIsPlayingCleanPreview(true);
+      setIsProcessing(false);
+
+      source.onended = () => {
+        setIsPlayingCleanPreview(false);
+        cleanPreviewSourceRef.current = null;
+      };
+    } catch (err) {
+      console.error('Failed to preview spectral clean audio:', err);
+      setIsProcessing(false);
+      setIsPlayingCleanPreview(false);
+    }
+  };
+
+  // Permanently apply spectral subtraction / DSP cleaning to active audio buffer in editor
+  const handleApplyCleanToActiveAudio = async () => {
+    if (!audioBuffer) return;
+    setIsProcessing(true);
+
+    try {
+      const renderedBuffer = await renderDSPAudioBuffer(audioBuffer, dspSettings);
+      const sampleRate = renderedBuffer.sampleRate;
+      const numChannels = renderedBuffer.numberOfChannels;
+      const length = renderedBuffer.length;
+      const channelsData: Float32Array[] = [];
+
+      for (let ch = 0; ch < numChannels; ch++) {
+        channelsData.push(renderedBuffer.getChannelData(ch));
+      }
+
+      const id3 = buildMetadataPayload();
+      const newBlob = encodeWAV(channelsData, sampleRate, item.bitDepth || 16, id3);
+
+      // Recompute waveform peak data
+      const peakData: number[] = [];
+      const step = Math.max(1, Math.floor(length / 64));
+      for (let p = 0; p < 64; p++) {
+        let max = 0;
+        const sStart = p * step;
+        const sEnd = Math.min(sStart + step, length);
+        for (let s = sStart; s < sEnd; s++) {
+          const v = Math.abs(channelsData[0][s]);
+          if (v > max) max = v;
+        }
+        peakData.push(Number(max.toFixed(3)));
+      }
+
+      setAudioBuffer(renderedBuffer);
+
+      const updatedItem: RecordingItem = {
+        ...item,
+        blob: newBlob,
+        blobUrl: URL.createObjectURL(newBlob),
+        sizeBytes: newBlob.size,
+        duration: length / sampleRate,
+        waveformPeakData: peakData,
+        dspFilters: dspSettings
+      };
+
+      if (onUpdateItem) {
+        onUpdateItem(updatedItem);
+      }
+
+      setIsProcessing(false);
+      setMetadataFeedback('Background noise successfully removed using spectral subtraction!');
+      setTimeout(() => setMetadataFeedback(null), 3500);
+    } catch (err) {
+      console.error('Failed to apply spectral clean to audio buffer:', err);
+      setIsProcessing(false);
     }
   };
 
@@ -1181,6 +1297,11 @@ export const AudioEditorModal: React.FC<AudioEditorModalProps> = ({
             }}
             onApplyAndExport={handleExportDSPCopy}
             isProcessing={isProcessing}
+            audioBuffer={audioBuffer}
+            selectionRange={{ startSec, endSec }}
+            onPreviewToggle={handlePreviewSpectralClean}
+            isPreviewPlaying={isPlayingCleanPreview}
+            onApplyCleanToEditor={handleApplyCleanToActiveAudio}
           />
         )}
 

@@ -30,9 +30,13 @@ import {
   Search,
   Filter,
   X,
-  Plus
+  Plus,
+  FolderArchive,
+  Archive
 } from 'lucide-react';
 import { BatchRenameModal } from './BatchRenameModal';
+import { BatchExportModal } from './BatchExportModal';
+import { StorageUsageChart } from './StorageUsageChart';
 
 interface RecordingsListProps {
   recordings: RecordingItem[];
@@ -70,9 +74,11 @@ export const RecordingsList: React.FC<RecordingsListProps> = ({
   // Multi-select state
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [isBatchRenameOpen, setIsBatchRenameOpen] = useState(false);
+  const [isBatchExportOpen, setIsBatchExportOpen] = useState(false);
   const [isBulkTagOpen, setIsBulkTagOpen] = useState(false);
   const [bulkTagInput, setBulkTagInput] = useState('');
   const [searchFilter, setSearchFilter] = useState('');
+  const [formatFilter, setFormatFilter] = useState<string>('');
   const [actionFeedback, setActionFeedback] = useState<string | null>(null);
 
   // Playback control
@@ -108,11 +114,15 @@ export const RecordingsList: React.FC<RecordingsListProps> = ({
     }
   };
 
-  // Filter recordings by search term
+  // Filter recordings by search term and format filter
   const filteredRecordings = useMemo(() => {
-    if (!searchFilter.trim()) return recordings;
+    let list = recordings;
+    if (formatFilter) {
+      list = list.filter((r) => r.format.toLowerCase() === formatFilter.toLowerCase());
+    }
+    if (!searchFilter.trim()) return list;
     const q = searchFilter.toLowerCase();
-    return recordings.filter((r) => {
+    return list.filter((r) => {
       const matchName = r.name.toLowerCase().includes(q);
       const matchTags = r.tags?.some((t) => t.toLowerCase().includes(q));
       const matchArtist = r.metadata?.artist?.toLowerCase().includes(q);
@@ -121,7 +131,7 @@ export const RecordingsList: React.FC<RecordingsListProps> = ({
       const matchFormat = r.format.toLowerCase().includes(q);
       return matchName || matchTags || matchArtist || matchAlbum || matchTitle || matchFormat;
     });
-  }, [recordings, searchFilter]);
+  }, [recordings, searchFilter, formatFilter]);
 
   // Selection handlers
   const handleToggleSelect = (id: string) => {
@@ -277,25 +287,47 @@ export const RecordingsList: React.FC<RecordingsListProps> = ({
         </div>
       )}
 
+      {/* Storage Usage Visualization with Recharts */}
+      <StorageUsageChart
+        recordings={recordings}
+        onFilterByFormat={(fmt) => setFormatFilter(fmt)}
+        activeFormatFilter={formatFilter}
+      />
+
       {/* Top Controls: Search Filter & Playback Speed Selector */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-slate-400 px-1">
-        {/* Search Filter Input */}
-        <div className="relative flex-1 max-w-md">
-          <Search className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
-          <input
-            type="text"
-            value={searchFilter}
-            onChange={(e) => setSearchFilter(e.target.value)}
-            placeholder="Search recordings by name, tag, speaker, format..."
-            className="w-full bg-slate-900 border border-slate-800 rounded-lg pl-8 pr-7 py-1.5 text-slate-200 text-xs focus:outline-none focus:border-sky-500"
-          />
-          {searchFilter && (
+        {/* Search Filter Input & Format Chip */}
+        <div className="flex items-center gap-2 flex-1 max-w-lg">
+          <div className="relative flex-1">
+            <Search className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+            <input
+              type="text"
+              value={searchFilter}
+              onChange={(e) => setSearchFilter(e.target.value)}
+              placeholder="Search recordings by name, tag, speaker, format..."
+              className="w-full bg-slate-900 border border-slate-800 rounded-lg pl-8 pr-7 py-1.5 text-slate-200 text-xs focus:outline-none focus:border-sky-500"
+            />
+            {searchFilter && (
+              <button
+                onClick={() => setSearchFilter('')}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300"
+                title="Clear search"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+
+          {/* Active format filter pill */}
+          {formatFilter && (
             <button
-              onClick={() => setSearchFilter('')}
-              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300"
-              title="Clear search"
+              type="button"
+              onClick={() => setFormatFilter('')}
+              className="px-2.5 py-1 bg-sky-950 text-sky-300 border border-sky-800 hover:border-sky-600 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer shrink-0"
+              title="Click to clear format filter"
             >
-              <X className="w-3.5 h-3.5" />
+              <span>Format: <strong>{formatFilter.toUpperCase()}</strong></span>
+              <X className="w-3 h-3 text-sky-400" />
             </button>
           )}
         </div>
@@ -372,6 +404,17 @@ export const RecordingsList: React.FC<RecordingsListProps> = ({
                 <span>Batch Rename ({selectedIds.size})</span>
               </button>
 
+              {/* Batch Export ZIP Button */}
+              <button
+                type="button"
+                onClick={() => setIsBatchExportOpen(true)}
+                className="px-3 py-1 bg-gradient-to-r from-sky-600 to-indigo-600 hover:from-sky-500 hover:to-indigo-500 text-white rounded-md text-[11px] font-semibold flex items-center gap-1.5 transition-colors cursor-pointer shadow-sm"
+                title="Export selected recordings and metadata as a single ZIP archive"
+              >
+                <FolderArchive className="w-3.5 h-3.5" />
+                <span>Export ZIP ({selectedIds.size})</span>
+              </button>
+
               {/* Bulk Tag Button */}
               <div className="relative">
                 <button
@@ -441,9 +484,25 @@ export const RecordingsList: React.FC<RecordingsListProps> = ({
               </button>
             </div>
           ) : (
-            <span className="text-slate-500 font-mono text-[11px]">
-              {filteredRecordings.length} {filteredRecordings.length === 1 ? 'recording' : 'recordings'} total
-            </span>
+            <div className="flex items-center gap-2">
+              <span className="text-slate-500 font-mono text-[11px]">
+                {filteredRecordings.length} {filteredRecordings.length === 1 ? 'recording' : 'recordings'} total
+              </span>
+              {filteredRecordings.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedIds(new Set(filteredRecordings.map((r) => r.id)));
+                    setIsBatchExportOpen(true);
+                  }}
+                  className="px-2.5 py-1 bg-slate-850 hover:bg-slate-800 text-sky-400 hover:text-sky-300 border border-slate-700/80 rounded-md text-[11px] font-medium flex items-center gap-1.5 transition-colors cursor-pointer"
+                  title="Quick batch export all filtered recordings to ZIP"
+                >
+                  <FolderArchive className="w-3.5 h-3.5 text-sky-400" />
+                  <span>Export All to ZIP</span>
+                </button>
+              )}
+            </div>
           )}
         </div>
       </div>
@@ -466,6 +525,16 @@ export const RecordingsList: React.FC<RecordingsListProps> = ({
           </div>
 
           <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setIsBatchExportOpen(true)}
+              className="px-3 py-1.5 bg-gradient-to-r from-sky-600 to-indigo-600 hover:from-sky-500 hover:to-indigo-500 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer shadow-md"
+              title="Batch export selected recordings into a ZIP file"
+            >
+              <FolderArchive className="w-3.5 h-3.5" />
+              <span>Export ZIP ({selectedIds.size})</span>
+            </button>
+
             <button
               type="button"
               onClick={() => setIsBatchRenameOpen(true)}
@@ -797,6 +866,13 @@ export const RecordingsList: React.FC<RecordingsListProps> = ({
         selectedItems={selectedRecordingsList}
         onClose={() => setIsBatchRenameOpen(false)}
         onApplyRename={handleApplyBatchRename}
+      />
+
+      {/* Batch Export ZIP Modal */}
+      <BatchExportModal
+        isOpen={isBatchExportOpen}
+        selectedItems={selectedRecordingsList}
+        onClose={() => setIsBatchExportOpen(false)}
       />
     </div>
   );

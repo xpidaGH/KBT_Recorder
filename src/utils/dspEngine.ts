@@ -1,4 +1,5 @@
 import { DSPSettings } from '../types/recorder';
+import { applySpectralSubtraction } from './spectralSubtraction';
 
 export const DEFAULT_DSP_SETTINGS: DSPSettings = {
   bypassAll: false,
@@ -18,6 +19,14 @@ export const DEFAULT_DSP_SETTINGS: DSPSettings = {
     reductionDb: 24,
     attackMs: 10,
     releaseMs: 150
+  },
+  spectralSubtraction: {
+    enabled: false,
+    strengthAlpha: 1.8,
+    noiseFloorBeta: 0.02,
+    spectralSmoothing: 0.35,
+    fftSize: 1024,
+    noiseProfileMode: 'auto_silence'
   },
   outputGainDb: 0
 };
@@ -105,8 +114,50 @@ export const DSP_PRESETS: DSPPreset[] = [
     settings: {
       noiseReduction: { enabled: true, thresholdDb: -28, reductionDb: 36, attackMs: 5, releaseMs: 220 }
     }
+  },
+  {
+    id: 'spectral_background_cut',
+    name: 'Spectral Subtraction De-Noise',
+    description: 'Removes constant background room hum, fan whirl & air hiss using FFT spectral subtraction',
+    type: 'noise',
+    settings: {
+      bypassAll: false,
+      highPass: { enabled: true, frequency: 80, q: 0.707 },
+      lowPass: { enabled: true, frequency: 12000, q: 0.707 },
+      spectralSubtraction: {
+        enabled: true,
+        strengthAlpha: 2.0,
+        noiseFloorBeta: 0.02,
+        spectralSmoothing: 0.35,
+        fftSize: 1024,
+        noiseProfileMode: 'auto_silence'
+      },
+      outputGainDb: 1.0
+    }
+  },
+  {
+    id: 'deep_fan_removal',
+    name: 'Heavy Fan & HVAC Removal',
+    description: 'Aggressive spectral subtraction (alpha 2.8x) combined with steep rumble cut for noisy rooms',
+    type: 'combo',
+    settings: {
+      bypassAll: false,
+      highPass: { enabled: true, frequency: 120, q: 0.8 },
+      lowPass: { enabled: true, frequency: 9500, q: 0.707 },
+      spectralSubtraction: {
+        enabled: true,
+        strengthAlpha: 2.8,
+        noiseFloorBeta: 0.015,
+        spectralSmoothing: 0.4,
+        fftSize: 1024,
+        noiseProfileMode: 'auto_silence'
+      },
+      outputGainDb: 1.5
+    }
   }
 ];
+
+export { applySpectralSubtraction, captureNoiseProfile, autoEstimateNoiseProfile } from './spectralSubtraction';
 
 /**
  * Applies smooth downward noise reduction / gating to Float32Array PCM samples.
@@ -255,20 +306,38 @@ export async function renderDSPAudioBuffer(
   // Render biquad filters + gain
   const renderedBuffer = await offlineCtx.startRendering();
 
-  // 4. Apply Noise Reduction / Noise Gate if enabled
-  if (settings.noiseReduction.enabled && !settings.bypassAll) {
+  // 4. Apply Spectral Subtraction and/or Noise Reduction if enabled
+  const needSpectral = settings.spectralSubtraction?.enabled && !settings.bypassAll;
+  const needGate = settings.noiseReduction?.enabled && !settings.bypassAll;
+
+  if (needSpectral || needGate) {
     const finalBuffer = offlineCtx.createBuffer(numChannels, lengthSamples, sampleRate);
     for (let ch = 0; ch < numChannels; ch++) {
-      const channelData = renderedBuffer.getChannelData(ch);
-      const denoised = applyNoiseReductionToChannel(
-        channelData,
-        sampleRate,
-        settings.noiseReduction.thresholdDb,
-        settings.noiseReduction.reductionDb,
-        settings.noiseReduction.attackMs,
-        settings.noiseReduction.releaseMs
-      );
-      finalBuffer.copyToChannel(denoised, ch);
+      let channelData: Float32Array<ArrayBufferLike> = renderedBuffer.getChannelData(ch);
+
+      // 4a. Spectral Subtraction (frequency-domain background noise removal)
+      if (needSpectral && settings.spectralSubtraction) {
+        channelData = applySpectralSubtraction(
+          channelData as any,
+          sampleRate,
+          settings.spectralSubtraction
+        );
+      }
+
+      // 4b. Dynamic Noise Reduction / Gate (time-domain envelope gate)
+      if (needGate) {
+        channelData = applyNoiseReductionToChannel(
+          channelData as any,
+          sampleRate,
+          settings.noiseReduction.thresholdDb,
+          settings.noiseReduction.reductionDb,
+          settings.noiseReduction.attackMs,
+          settings.noiseReduction.releaseMs
+        );
+      }
+
+      const targetChannel = finalBuffer.getChannelData(ch);
+      targetChannel.set(channelData as any);
     }
     return finalBuffer;
   }
@@ -317,8 +386,8 @@ export function computeFrequencyResponse(
     lp.frequency.value = settings.lowPass.frequency;
     lp.Q.value = settings.lowPass.q;
 
-    hp.getFrequencyResponse(frequencies, magHP, phaseHP);
-    lp.getFrequencyResponse(frequencies, magLP, phaseLP);
+    hp.getFrequencyResponse(frequencies as any, magHP as any, phaseHP as any);
+    lp.getFrequencyResponse(frequencies as any, magLP as any, phaseLP as any);
 
     for (let i = 0; i < count; i++) {
       const hpGain = settings.highPass.enabled ? magHP[i] : 1.0;

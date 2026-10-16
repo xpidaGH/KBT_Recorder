@@ -48,6 +48,17 @@ export interface AudioID3Metadata {
   track?: string;
 }
 
+export interface SpectralSubtractionSettings {
+  enabled: boolean;
+  strengthAlpha: number; // 0.5 - 4.0 (over-subtraction factor)
+  noiseFloorBeta: number; // 0.005 - 0.15 (spectral floor to prevent musical noise)
+  spectralSmoothing: number; // 0.0 - 0.8 (frame temporal smoothing)
+  fftSize: number; // 512, 1024, 2048
+  noiseProfileMode: 'auto_silence' | 'selection' | 'adaptive';
+  capturedProfile?: number[]; // FFT magnitude bins
+  noiseSnrEstimateDb?: number;
+}
+
 export interface DSPSettings {
   bypassAll: boolean;
   highPass: {
@@ -67,6 +78,7 @@ export interface DSPSettings {
     attackMs: number; // 1 to 50 ms
     releaseMs: number; // 20 to 500 ms
   };
+  spectralSubtraction: SpectralSubtractionSettings;
   outputGainDb: number; // -12 to +12 dB
 }
 

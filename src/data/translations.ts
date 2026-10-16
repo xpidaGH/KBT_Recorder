@@ -47,8 +47,8 @@ export const LANGUAGE_GUIDES: Record<string, LanguageGuide> = {
         content: 'Sync directly to Dropbox, Google Drive, iCloud Drive, Evernote, Email, or Webhooks. Schedule automated backups immediately, every 15 minutes, hourly, or daily on Wi-Fi.'
       },
       {
-        title: '6. In-App Audio Editing Suite',
-        content: 'Inspect interactive waveforms, trim start and end points with millisecond accuracy, apply gain amplification, insert silence, and transcode between WAV, MP3, FLAC, M4A, and AMR.'
+        title: '6. In-App Audio Editing Suite & DSP Spectral Noise Removal',
+        content: 'Inspect interactive waveforms with scrubbing needle, trim start and end points with millisecond accuracy, edit ID3 tags, and use the DSP studio to eliminate background noise (AC, fan, and room hiss) using STFT spectral subtraction alongside high-pass, low-pass, and noise gate filters.'
       },
       {
         title: '7. 21-Language Capstone Architecture Hub',
