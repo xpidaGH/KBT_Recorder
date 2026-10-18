@@ -1,6 +1,7 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { Play, Square, Pause, ShieldCheck, Sparkles, AlertCircle, FileAudio, MapPin } from 'lucide-react';
-import { AudioConfig, GeoLocationData } from '../types/recorder';
+import React, { useEffect, useRef, useState, useMemo } from 'react';
+import { Play, Square, Pause, ShieldCheck, Sparkles, AlertCircle, FileAudio, MapPin, Mic, Music, FileText, Check } from 'lucide-react';
+import { AudioConfig, GeoLocationData, RecordingPreset } from '../types/recorder';
+import { BUILT_IN_RECORDING_PRESETS, matchActivePreset } from '../utils/recordingPresets';
 
 interface RecordingControlsProps {
   isRecording: boolean;
@@ -10,6 +11,7 @@ interface RecordingControlsProps {
   onResume: () => void;
   onStop: () => void;
   config: AudioConfig;
+  onChangeConfig?: (newConfig: Partial<AudioConfig>) => void;
   recordedBytesEstimate: number;
   liveTranscript: string;
   onClearTranscript: () => void;
@@ -24,6 +26,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
   onResume,
   onStop,
   config,
+  onChangeConfig,
   recordedBytesEstimate,
   liveTranscript,
   onClearTranscript,
@@ -77,6 +80,26 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
     return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+  };
+
+  const activePreset = useMemo(() => {
+    return matchActivePreset(config);
+  }, [config]);
+
+  const handleApplyPreset = (preset: RecordingPreset) => {
+    if (!onChangeConfig) return;
+    onChangeConfig({
+      sampleRate: preset.sampleRate,
+      bitDepth: preset.bitDepth,
+      vadEnabled: preset.vadEnabled,
+      vadThreshold: preset.vadThreshold,
+      vadDuration: preset.vadDuration,
+      format: preset.format,
+      channels: preset.channels,
+      gain: preset.gain,
+      agc: preset.agc,
+      gpsTaggingEnabled: preset.gpsTaggingEnabled !== undefined ? preset.gpsTaggingEnabled : config.gpsTaggingEnabled
+    });
   };
 
   return (
@@ -140,6 +163,37 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Quick Environment Preset Switcher when in Standby */}
+      {!isRecording && onChangeConfig && (
+        <div className="flex flex-wrap items-center justify-center gap-2 pt-1 pb-1">
+          <span className="text-[11px] font-mono text-slate-400 uppercase tracking-wider font-semibold">
+            Quick Environment:
+          </span>
+          {BUILT_IN_RECORDING_PRESETS.slice(0, 3).map((p) => {
+            const isActive = activePreset?.id === p.id;
+            return (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => handleApplyPreset(p)}
+                className={`px-3 py-1 rounded-full text-xs font-medium transition-all flex items-center gap-1.5 border cursor-pointer ${
+                  isActive
+                    ? 'bg-red-600/20 text-red-300 border-red-500/80 shadow-xs font-semibold'
+                    : 'bg-slate-950/80 hover:bg-slate-800 text-slate-400 hover:text-slate-200 border-slate-800'
+                }`}
+                title={p.description}
+              >
+                {p.category === 'podcasting' && <Mic className="w-3 h-3 text-purple-400" />}
+                {p.category === 'voicememo' && <FileText className="w-3 h-3 text-amber-400" />}
+                {p.category === 'music' && <Music className="w-3 h-3 text-emerald-400" />}
+                <span>{p.name}</span>
+                {isActive && <Check className="w-3 h-3 text-red-400" />}
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {/* Main Transport Controls */}
       <div className="flex items-center justify-center gap-4 py-2">

@@ -26,6 +26,25 @@ export interface AudioConfig {
   gpsTaggingEnabled: boolean; // Automatic GPS geolocation tagging
 }
 
+export interface RecordingPreset {
+  id: string;
+  name: string;
+  description: string;
+  category: 'podcasting' | 'voicememo' | 'music' | 'field' | 'custom';
+  sampleRate: number; // 8000, 16000, 22050, 44100, 48000, 96000
+  bitDepth: BitDepth; // 16, 24, 32
+  vadEnabled: boolean;
+  vadThreshold: number; // -60 to -20 dB
+  vadDuration: number; // ms to consider silence
+  format: AudioFormat;
+  channels: 1 | 2;
+  gain: number;
+  agc: boolean;
+  gpsTaggingEnabled?: boolean;
+  isBuiltIn?: boolean;
+  createdAt?: number;
+}
+
 export type CloudProvider = 'dropbox' | 'googledrive' | 'icloud' | 'evernote' | 'email' | 'webhook';
 
 export type ScheduleMode = 'immediate' | '15m' | '1h' | 'daily_wifi';
@@ -59,6 +78,16 @@ export interface SpectralSubtractionSettings {
   noiseSnrEstimateDb?: number;
 }
 
+export interface NoiseGateSettings {
+  enabled: boolean;
+  floorThresholdDb: number; // Floor threshold in dB (-80 to -12 dB) to eliminate background noise
+  reductionDb: number; // Floor attenuation / depth in dB (6 to 80 dB)
+  attackMs: number; // Opening speed in ms (0.5 to 50 ms)
+  holdMs: number; // Hold open duration in ms before closing (0 to 300 ms)
+  releaseMs: number; // Closing smooth fade in ms (10 to 600 ms)
+  hysteresisDb: number; // Offset in dB to prevent gate flutter (0 to 12 dB)
+}
+
 export interface DSPSettings {
   bypassAll: boolean;
   highPass: {
@@ -78,6 +107,7 @@ export interface DSPSettings {
     attackMs: number; // 1 to 50 ms
     releaseMs: number; // 20 to 500 ms
   };
+  noiseGate: NoiseGateSettings;
   spectralSubtraction: SpectralSubtractionSettings;
   outputGainDb: number; // -12 to +12 dB
 }

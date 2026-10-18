@@ -275,19 +275,25 @@ export const BatchRenameModal: React.FC<BatchRenameModalProps> = ({
                     />
                   </div>
 
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-slate-500">Quick Presets:</span>
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="text-slate-500">Quick Patterns:</span>
                     {[
                       { label: 'Take_{0n}', val: 'Take_{0n}' },
+                      { label: '{original}_{date}', val: '{original}_{date}' },
+                      { label: '{date}_{original}', val: '{date}_{original}' },
+                      { label: 'Session_{date}_{0n}', val: 'Session_{date}_{0n}' },
                       { label: 'Interview_{0n}', val: 'Interview_{0n}' },
-                      { label: 'VoiceMemo_{n}', val: 'VoiceMemo_{n}' },
-                      { label: '{original}_{0n}', val: '{original}_{0n}' }
+                      { label: 'VoiceMemo_{n}', val: 'VoiceMemo_{n}' }
                     ].map((p) => (
                       <button
                         key={p.label}
                         type="button"
                         onClick={() => setTemplate(p.val)}
-                        className="px-2 py-0.5 bg-slate-900 hover:bg-slate-800 text-slate-300 rounded border border-slate-800 text-[10px] transition-colors cursor-pointer"
+                        className={`px-2 py-0.5 rounded border text-[10px] transition-colors cursor-pointer ${
+                          template === p.val
+                            ? 'bg-sky-950 text-sky-300 border-sky-600 font-bold'
+                            : 'bg-slate-900 hover:bg-slate-800 text-slate-300 border-slate-800'
+                        }`}
                       >
                         {p.label}
                       </button>
@@ -298,29 +304,49 @@ export const BatchRenameModal: React.FC<BatchRenameModalProps> = ({
             )}
 
             {mode === 'prefix_suffix' && (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-                <div className="flex flex-col gap-1.5">
-                  <label className="font-semibold text-slate-300">Prefix to Prepend</label>
-                  <input
-                    type="text"
-                    value={prefix}
-                    onChange={(e) => setPrefix(e.target.value)}
-                    className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-slate-100 font-mono text-xs focus:outline-none focus:border-sky-500"
-                    placeholder="e.g. 2026_Fall_ or Conf_"
-                  />
-                  <span className="text-[10px] text-slate-500">Added to the beginning of existing filename</span>
-                </div>
+              <div className="flex flex-col gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                  <div className="flex flex-col gap-1.5">
+                    <div className="flex items-center justify-between">
+                      <label className="font-semibold text-slate-300">Prefix to Prepend</label>
+                      <button
+                        type="button"
+                        onClick={() => setPrefix(`${new Date().toISOString().slice(0, 10)}_`)}
+                        className="text-[10px] text-sky-400 hover:text-sky-300 underline cursor-pointer"
+                      >
+                        + Prepend Date
+                      </button>
+                    </div>
+                    <input
+                      type="text"
+                      value={prefix}
+                      onChange={(e) => setPrefix(e.target.value)}
+                      className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-slate-100 font-mono text-xs focus:outline-none focus:border-sky-500"
+                      placeholder="e.g. 2026-10-16_ or Conf_"
+                    />
+                    <span className="text-[10px] text-slate-500">Added to the beginning of existing filename</span>
+                  </div>
 
-                <div className="flex flex-col gap-1.5">
-                  <label className="font-semibold text-slate-300">Suffix to Append</label>
-                  <input
-                    type="text"
-                    value={suffix}
-                    onChange={(e) => setSuffix(e.target.value)}
-                    className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-slate-100 font-mono text-xs focus:outline-none focus:border-sky-500"
-                    placeholder="e.g. _Master or _Edited"
-                  />
-                  <span className="text-[10px] text-slate-500">Added to the end of filename before extension</span>
+                  <div className="flex flex-col gap-1.5">
+                    <div className="flex items-center justify-between">
+                      <label className="font-semibold text-slate-300">Suffix to Append</label>
+                      <button
+                        type="button"
+                        onClick={() => setSuffix(`_${new Date().toISOString().slice(0, 10)}`)}
+                        className="text-[10px] text-sky-400 hover:text-sky-300 underline cursor-pointer"
+                      >
+                        + Append Date
+                      </button>
+                    </div>
+                    <input
+                      type="text"
+                      value={suffix}
+                      onChange={(e) => setSuffix(e.target.value)}
+                      className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-slate-100 font-mono text-xs focus:outline-none focus:border-sky-500"
+                      placeholder="e.g. _2026-10-16 or _Master"
+                    />
+                    <span className="text-[10px] text-slate-500">Added to the end of filename before extension</span>
+                  </div>
                 </div>
               </div>
             )}

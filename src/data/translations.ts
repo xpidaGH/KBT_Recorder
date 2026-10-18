@@ -53,6 +53,10 @@ export const LANGUAGE_GUIDES: Record<string, LanguageGuide> = {
       {
         title: '7. 21-Language Capstone Architecture Hub',
         content: 'Explore complete, production-grade source code across 21 programming environments including Core C++, Rust, Python, Go, Kotlin, Dart, C#, Java, PHP, Ruby, Bash, PowerShell, SQL, R, Scala, MATLAB, COBOL, and Assembly.'
+      },
+      {
+        title: '8. Recording Presets, Bulk Export & Batch Renaming',
+        content: 'Quickly switch between pre-calibrated environments like Podcasting (48kHz/24b/VAD), Voice Memo (22kHz/16b/VAD), and High-Fidelity Music (96kHz/32b continuous stereo), or save custom presets. In the library view, select multiple recordings to perform bulk export into a single ZIP archive or batch rename with prefixes, sequential numbering, and date appending.'
       }
     ]
   },

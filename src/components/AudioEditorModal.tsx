@@ -34,6 +34,13 @@ import {
 import { encodeWAV } from '../utils/audioEngine';
 import { DSPFilterPanel } from './DSPFilterPanel';
 import { DEFAULT_DSP_SETTINGS, renderDSPAudioBuffer } from '../utils/dspEngine';
+import {
+  SilenceDetectorOptions,
+  DEFAULT_SILENCE_OPTIONS,
+  analyzeSilenceInAudioBuffer,
+  trimSilenceFromAudioBuffer
+} from '../utils/silenceTrimmer';
+import { SilenceTrimmerPanel } from './SilenceTrimmerPanel';
 
 interface AudioEditorModalProps {
   item: RecordingItem | null;
@@ -85,12 +92,20 @@ export const AudioEditorModal: React.FC<AudioEditorModalProps> = ({
   // DSP Filter Settings State
   const [dspSettings, setDspSettings] = useState<DSPSettings>(item.dspFilters || DEFAULT_DSP_SETTINGS);
   const [isPlayingCleanPreview, setIsPlayingCleanPreview] = useState(false);
+  const [isPlayingGatePreview, setIsPlayingGatePreview] = useState(false);
+
+  // Silence Trimmer State
+  const [silenceOptions, setSilenceOptions] = useState<SilenceDetectorOptions>(DEFAULT_SILENCE_OPTIONS);
+  const [isSilencePanelOpen, setIsSilencePanelOpen] = useState(false);
+  const [isPlayingSilencePreview, setIsPlayingSilencePreview] = useState(false);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const timelineCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const activeSourceRef = useRef<AudioBufferSourceNode | null>(null);
   const cleanPreviewSourceRef = useRef<AudioBufferSourceNode | null>(null);
+  const gatePreviewSourceRef = useRef<AudioBufferSourceNode | null>(null);
+  const silencePreviewSourceRef = useRef<AudioBufferSourceNode | null>(null);
   const liveHpFilterRef = useRef<BiquadFilterNode | null>(null);
   const liveLpFilterRef = useRef<BiquadFilterNode | null>(null);
   const liveGainRef = useRef<GainNode | null>(null);
@@ -160,6 +175,12 @@ export const AudioEditorModal: React.FC<AudioEditorModalProps> = ({
       }
       if (cleanPreviewSourceRef.current) {
         try { cleanPreviewSourceRef.current.stop(); } catch (e) { /* ignore */ }
+      }
+      if (gatePreviewSourceRef.current) {
+        try { gatePreviewSourceRef.current.stop(); } catch (e) { /* ignore */ }
+      }
+      if (silencePreviewSourceRef.current) {
+        try { silencePreviewSourceRef.current.stop(); } catch (e) { /* ignore */ }
       }
       if (playheadAnimRef.current) cancelAnimationFrame(playheadAnimRef.current);
       if (audioContextRef.current) audioContextRef.current.close();
@@ -743,6 +764,136 @@ export const AudioEditorModal: React.FC<AudioEditorModalProps> = ({
     }
   };
 
+  // Preview / Audition Noise Gate Audio
+  const handlePreviewNoiseGate = async () => {
+    if (!audioBuffer || !audioContextRef.current) return;
+    const ctx = audioContextRef.current;
+    if (ctx.state === 'suspended') await ctx.resume();
+
+    // If currently playing preview, stop it
+    if (isPlayingGatePreview) {
+      if (gatePreviewSourceRef.current) {
+        try { gatePreviewSourceRef.current.stop(); } catch (e) { /* ignore */ }
+        gatePreviewSourceRef.current = null;
+      }
+      setIsPlayingGatePreview(false);
+      return;
+    }
+
+    // Stop standard playback if running
+    if (activeSourceRef.current) {
+      try { activeSourceRef.current.stop(); } catch (e) { /* ignore */ }
+      activeSourceRef.current = null;
+      setIsPlaying(false);
+    }
+
+    setIsProcessing(true);
+    try {
+      const activeGateSettings: DSPSettings = {
+        ...dspSettings,
+        noiseGate: {
+          ...dspSettings.noiseGate,
+          enabled: true
+        }
+      };
+
+      const rendered = await renderDSPAudioBuffer(audioBuffer, activeGateSettings);
+      const source = ctx.createBufferSource();
+      source.buffer = rendered;
+
+      const gain = ctx.createGain();
+      gain.gain.setValueAtTime(1.0, ctx.currentTime);
+      source.connect(gain);
+      gain.connect(ctx.destination);
+
+      const offset = Math.max(0, Math.min(currentTime, audioBuffer.duration));
+      const dur = Math.max(0.1, (endSec || audioBuffer.duration) - offset);
+      source.start(0, offset, dur);
+
+      gatePreviewSourceRef.current = source;
+      setIsPlayingGatePreview(true);
+      setIsProcessing(false);
+
+      source.onended = () => {
+        setIsPlayingGatePreview(false);
+        gatePreviewSourceRef.current = null;
+      };
+    } catch (err) {
+      console.error('Failed to preview noise gate audio:', err);
+      setIsProcessing(false);
+      setIsPlayingGatePreview(false);
+    }
+  };
+
+  // Permanently apply noise gate to active audio buffer in editor
+  const handleApplyNoiseGateToActiveAudio = async () => {
+    if (!audioBuffer) return;
+    setIsProcessing(true);
+
+    try {
+      const activeGateSettings: DSPSettings = {
+        ...dspSettings,
+        noiseGate: {
+          ...dspSettings.noiseGate,
+          enabled: true
+        }
+      };
+
+      const renderedBuffer = await renderDSPAudioBuffer(audioBuffer, activeGateSettings);
+      const sampleRate = renderedBuffer.sampleRate;
+      const numChannels = renderedBuffer.numberOfChannels;
+      const length = renderedBuffer.length;
+      const channelsData: Float32Array[] = [];
+
+      for (let ch = 0; ch < numChannels; ch++) {
+        channelsData.push(renderedBuffer.getChannelData(ch));
+      }
+
+      const id3 = buildMetadataPayload();
+      const newBlob = encodeWAV(channelsData, sampleRate, item.bitDepth || 16, id3);
+
+      // Recompute waveform peak data
+      const peakData: number[] = [];
+      const step = Math.max(1, Math.floor(length / 64));
+      for (let p = 0; p < 64; p++) {
+        let max = 0;
+        const sStart = p * step;
+        const sEnd = Math.min(sStart + step, length);
+        for (let s = sStart; s < sEnd; s++) {
+          const v = Math.abs(channelsData[0][s]);
+          if (v > max) max = v;
+        }
+        peakData.push(Number(max.toFixed(3)));
+      }
+
+      setAudioBuffer(renderedBuffer);
+      setDspSettings(activeGateSettings);
+
+      const updatedItem: RecordingItem = {
+        ...item,
+        blob: newBlob,
+        blobUrl: URL.createObjectURL(newBlob),
+        sizeBytes: newBlob.size,
+        duration: length / sampleRate,
+        waveformPeakData: peakData,
+        dspFilters: activeGateSettings
+      };
+
+      if (onUpdateItem) {
+        onUpdateItem(updatedItem);
+      }
+
+      setIsProcessing(false);
+      setMetadataFeedback(
+        `Noise Gate successfully applied! Low-level background noise below ${activeGateSettings.noiseGate.floorThresholdDb} dB eliminated.`
+      );
+      setTimeout(() => setMetadataFeedback(null), 3500);
+    } catch (err) {
+      console.error('Failed to apply noise gate to audio buffer:', err);
+      setIsProcessing(false);
+    }
+  };
+
   // Export Full Audio Processed through Active DSP Chain
   const handleExportDSPCopy = async () => {
     if (!audioBuffer) return;
@@ -934,7 +1085,11 @@ export const AudioEditorModal: React.FC<AudioEditorModalProps> = ({
           >
             <Filter className="w-4 h-4" />
             <span>DSP Audio Filters & FX</span>
-            {(dspSettings.highPass.enabled || dspSettings.lowPass.enabled || dspSettings.noiseReduction.enabled) && (
+            {(dspSettings.highPass.enabled ||
+              dspSettings.lowPass.enabled ||
+              dspSettings.noiseReduction.enabled ||
+              dspSettings.noiseGate?.enabled ||
+              dspSettings.spectralSubtraction?.enabled) && (
               <span
                 className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono ${
                   dspSettings.bypassAll
@@ -1038,8 +1193,11 @@ export const AudioEditorModal: React.FC<AudioEditorModalProps> = ({
                       ? `${(dspSettings.lowPass.frequency / 1000).toFixed(1)}kHz`
                       : `${dspSettings.lowPass.frequency}Hz`
                     : 'Off'}{' '}
-                  · NR:{' '}
-                  {dspSettings.noiseReduction.enabled ? `${dspSettings.noiseReduction.thresholdDb}dB` : 'Off'}
+                  · Gate:{' '}
+                  {(dspSettings.noiseGate?.enabled || dspSettings.noiseReduction.enabled)
+                    ? `${dspSettings.noiseGate?.floorThresholdDb ?? dspSettings.noiseReduction.thresholdDb}dB`
+                    : 'Off'}
+                  {dspSettings.spectralSubtraction?.enabled ? ' · Spectral:On' : ''}
                 </span>
                 {dspSettings.bypassAll && (
                   <span className="text-[10px] bg-amber-950 text-amber-300 border border-amber-800/80 px-1.5 py-0.2 rounded font-mono">
@@ -1302,6 +1460,9 @@ export const AudioEditorModal: React.FC<AudioEditorModalProps> = ({
             onPreviewToggle={handlePreviewSpectralClean}
             isPreviewPlaying={isPlayingCleanPreview}
             onApplyCleanToEditor={handleApplyCleanToActiveAudio}
+            onPreviewNoiseGateToggle={handlePreviewNoiseGate}
+            isNoiseGatePreviewPlaying={isPlayingGatePreview}
+            onApplyNoiseGateToEditor={handleApplyNoiseGateToActiveAudio}
           />
         )}
 

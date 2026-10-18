@@ -1,11 +1,12 @@
 import React, { useEffect, useRef, useState, useMemo } from 'react';
-import { DSPSettings, SpectralSubtractionSettings } from '../types/recorder';
+import { DSPSettings, SpectralSubtractionSettings, NoiseGateSettings } from '../types/recorder';
 import {
   DSP_PRESETS,
   DSPPreset,
   computeFrequencyResponse,
   captureNoiseProfile,
-  autoEstimateNoiseProfile
+  autoEstimateNoiseProfile,
+  applyNoiseGateToChannel
 } from '../utils/dspEngine';
 import {
   Volume2,
@@ -23,7 +24,12 @@ import {
   Scissors,
   CheckCircle2,
   Info,
-  Sliders
+  Sliders,
+  ShieldCheck,
+  DoorClosed,
+  DoorOpen,
+  Zap,
+  Gauge
 } from 'lucide-react';
 
 interface DSPFilterPanelProps {
@@ -36,6 +42,9 @@ interface DSPFilterPanelProps {
   onPreviewToggle?: () => void;
   isPreviewPlaying?: boolean;
   onApplyCleanToEditor?: () => void;
+  onPreviewNoiseGateToggle?: () => void;
+  isNoiseGatePreviewPlaying?: boolean;
+  onApplyNoiseGateToEditor?: () => void;
 }
 
 export const DSPFilterPanel: React.FC<DSPFilterPanelProps> = ({
@@ -47,12 +56,16 @@ export const DSPFilterPanel: React.FC<DSPFilterPanelProps> = ({
   selectionRange,
   onPreviewToggle,
   isPreviewPlaying = false,
-  onApplyCleanToEditor
+  onApplyCleanToEditor,
+  onPreviewNoiseGateToggle,
+  isNoiseGatePreviewPlaying = false,
+  onApplyNoiseGateToEditor
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const profileCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const [profilerFeedback, setProfilerFeedback] = useState<string | null>(null);
+  const [gateFeedback, setGateFeedback] = useState<string | null>(null);
 
   // Safe fallback for spectral subtraction settings
   const spectralSettings: SpectralSubtractionSettings = useMemo(() => {
@@ -67,6 +80,53 @@ export const DSPFilterPanel: React.FC<DSPFilterPanelProps> = ({
       }
     );
   }, [settings.spectralSubtraction]);
+
+  // Safe fallback for Noise Gate settings
+  const gateSettings: NoiseGateSettings = useMemo(() => {
+    return (
+      settings.noiseGate || {
+        enabled: settings.noiseReduction?.enabled || false,
+        floorThresholdDb: settings.noiseReduction?.thresholdDb ?? -42,
+        reductionDb: settings.noiseReduction?.reductionDb ?? 36,
+        attackMs: settings.noiseReduction?.attackMs ?? 5,
+        holdMs: 40,
+        releaseMs: settings.noiseReduction?.releaseMs ?? 150,
+        hysteresisDb: 3
+      }
+    );
+  }, [settings.noiseGate, settings.noiseReduction]);
+
+  // Measure recording noise floor and dynamic peak if audioBuffer is available
+  const measuredNoiseFloorDb = useMemo(() => {
+    if (!audioBuffer) return null;
+    try {
+      const data = audioBuffer.getChannelData(0);
+      const step = Math.max(1, Math.floor(data.length / 500));
+      const windowSamples = Math.min(data.length, Math.floor(audioBuffer.sampleRate * 0.05)); // 50ms windows
+      let minRms = 1.0;
+      let maxPeak = 0.0;
+
+      for (let i = 0; i < data.length - windowSamples; i += windowSamples) {
+        let sumSq = 0;
+        for (let j = 0; j < windowSamples; j += 4) {
+          const s = data[i + j];
+          sumSq += s * s;
+          const absVal = Math.abs(s);
+          if (absVal > maxPeak) maxPeak = absVal;
+        }
+        const rms = Math.sqrt(sumSq / (windowSamples / 4));
+        if (rms > 1e-5 && rms < minRms) {
+          minRms = rms;
+        }
+      }
+
+      const floorDb = Math.round(20 * Math.log10(Math.max(1e-5, minRms)));
+      const peakDb = Math.round(20 * Math.log10(Math.max(1e-5, maxPeak)));
+      return { floorDb, peakDb };
+    } catch (e) {
+      return null;
+    }
+  }, [audioBuffer]);
 
   // Update helpers
   const updateSetting = <K extends keyof DSPSettings>(key: K, value: DSPSettings[K]) => {
@@ -96,14 +156,37 @@ export const DSPFilterPanel: React.FC<DSPFilterPanelProps> = ({
     });
   };
 
-  const updateNoiseReduction = (field: keyof DSPSettings['noiseReduction'], value: any) => {
+  const updateNoiseGate = (field: keyof NoiseGateSettings, value: any) => {
+    const updatedGate: NoiseGateSettings = {
+      ...gateSettings,
+      [field]: value
+    };
     onChange({
       ...settings,
+      noiseGate: updatedGate,
       noiseReduction: {
         ...settings.noiseReduction,
-        [field]: value
+        enabled: updatedGate.enabled,
+        thresholdDb: updatedGate.floorThresholdDb,
+        reductionDb: Math.min(48, updatedGate.reductionDb),
+        attackMs: updatedGate.attackMs,
+        releaseMs: updatedGate.releaseMs
       }
     });
+  };
+
+  const handleAutoDetectFloorThreshold = () => {
+    if (!measuredNoiseFloorDb) {
+      setGateFeedback('No audio loaded to measure noise floor.');
+      setTimeout(() => setGateFeedback(null), 3000);
+      return;
+    }
+    // Set floor threshold 4dB above measured background noise floor
+    const recommendedThreshold = Math.min(-18, Math.max(-70, measuredNoiseFloorDb.floorDb + 4));
+    updateNoiseGate('floorThresholdDb', recommendedThreshold);
+    updateNoiseGate('enabled', true);
+    setGateFeedback(`Noise floor auto-detected at ${measuredNoiseFloorDb.floorDb} dB. Floor threshold set to ${recommendedThreshold} dB.`);
+    setTimeout(() => setGateFeedback(null), 4000);
   };
 
   const updateSpectral = (field: keyof SpectralSubtractionSettings, value: any) => {
@@ -211,6 +294,19 @@ export const DSPFilterPanel: React.FC<DSPFilterPanelProps> = ({
 
   // Preset selector
   const handleApplyPreset = (preset: DSPPreset) => {
+    const updatedGate = preset.settings.noiseGate
+      ? { ...gateSettings, ...preset.settings.noiseGate }
+      : (preset.settings.noiseReduction
+          ? {
+              ...gateSettings,
+              enabled: preset.settings.noiseReduction.enabled ?? gateSettings.enabled,
+              floorThresholdDb: preset.settings.noiseReduction.thresholdDb ?? gateSettings.floorThresholdDb,
+              reductionDb: preset.settings.noiseReduction.reductionDb ?? gateSettings.reductionDb,
+              attackMs: preset.settings.noiseReduction.attackMs ?? gateSettings.attackMs,
+              releaseMs: preset.settings.noiseReduction.releaseMs ?? gateSettings.releaseMs
+            }
+          : gateSettings);
+
     onChange({
       ...settings,
       ...preset.settings,
@@ -220,9 +316,17 @@ export const DSPFilterPanel: React.FC<DSPFilterPanelProps> = ({
       lowPass: preset.settings.lowPass
         ? { ...settings.lowPass, ...preset.settings.lowPass }
         : settings.lowPass,
+      noiseGate: updatedGate,
       noiseReduction: preset.settings.noiseReduction
         ? { ...settings.noiseReduction, ...preset.settings.noiseReduction }
-        : settings.noiseReduction,
+        : {
+            ...settings.noiseReduction,
+            enabled: updatedGate.enabled,
+            thresholdDb: updatedGate.floorThresholdDb,
+            reductionDb: Math.min(48, updatedGate.reductionDb),
+            attackMs: updatedGate.attackMs,
+            releaseMs: updatedGate.releaseMs
+          },
       spectralSubtraction: preset.settings.spectralSubtraction
         ? { ...spectralSettings, ...preset.settings.spectralSubtraction }
         : spectralSettings
@@ -236,6 +340,15 @@ export const DSPFilterPanel: React.FC<DSPFilterPanelProps> = ({
       highPass: { enabled: false, frequency: 80, q: 0.707 },
       lowPass: { enabled: false, frequency: 6000, q: 0.707 },
       noiseReduction: { enabled: false, thresholdDb: -36, reductionDb: 24, attackMs: 10, releaseMs: 150 },
+      noiseGate: {
+        enabled: false,
+        floorThresholdDb: -42,
+        reductionDb: 36,
+        attackMs: 5,
+        holdMs: 40,
+        releaseMs: 150,
+        hysteresisDb: 3
+      },
       spectralSubtraction: {
         enabled: false,
         strengthAlpha: 1.8,
@@ -1046,29 +1159,40 @@ export const DSPFilterPanel: React.FC<DSPFilterPanelProps> = ({
         </div>
       </div>
 
-      {/* Module 3: Downward Noise Reduction & Gate */}
+      {/* Module 3: Precision Noise Gate & Floor Threshold */}
       <div
         className={`p-4 rounded-xl border transition-all flex flex-col gap-4 ${
-          settings.noiseReduction.enabled && !settings.bypassAll
-            ? 'bg-slate-900/90 border-emerald-500/50 shadow-md shadow-emerald-950/20'
+          gateSettings.enabled && !settings.bypassAll
+            ? 'bg-slate-900/90 border-teal-500/50 shadow-md shadow-teal-950/20'
             : 'bg-slate-950/60 border-slate-800 opacity-80'
         }`}
       >
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2.5">
             <div
-              className={`w-7 h-7 rounded-lg flex items-center justify-center font-mono font-bold text-xs ${
-                settings.noiseReduction.enabled && !settings.bypassAll
-                  ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
+              className={`w-8 h-8 rounded-lg flex items-center justify-center font-mono font-bold text-xs ${
+                gateSettings.enabled && !settings.bypassAll
+                  ? 'bg-teal-500/20 text-teal-400 border border-teal-500/40 shadow-sm'
                   : 'bg-slate-800 text-slate-500'
               }`}
             >
-              NR
+              {gateSettings.enabled && !settings.bypassAll ? (
+                <DoorOpen className="w-4 h-4 text-teal-400" />
+              ) : (
+                <DoorClosed className="w-4 h-4 text-slate-500" />
+              )}
             </div>
             <div>
-              <span className="text-xs font-bold text-white block">Noise Gate & Envelope Gating</span>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold text-white block">Noise Gate (Floor Threshold)</span>
+                {gateSettings.enabled && !settings.bypassAll && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-teal-950 text-teal-300 border border-teal-700/60 font-mono font-medium">
+                    FLOOR ACTIVE
+                  </span>
+                )}
+              </div>
               <span className="text-[11px] text-slate-400">
-                Smoothly silences residual background air and room hum during pauses
+                Eliminates low-level background noise, room hum, hiss & breath below a configured floor threshold
               </span>
             </div>
           </div>
@@ -1076,97 +1200,354 @@ export const DSPFilterPanel: React.FC<DSPFilterPanelProps> = ({
           {/* Enable switch */}
           <button
             type="button"
-            onClick={() => updateNoiseReduction('enabled', !settings.noiseReduction.enabled)}
+            onClick={() => updateNoiseGate('enabled', !gateSettings.enabled)}
             className={`w-11 h-6 rounded-full transition-colors p-0.5 cursor-pointer flex items-center ${
-              settings.noiseReduction.enabled ? 'bg-emerald-600 justify-end' : 'bg-slate-800 justify-start'
+              gateSettings.enabled ? 'bg-teal-600 justify-end' : 'bg-slate-800 justify-start'
             }`}
+            title={gateSettings.enabled ? 'Disable Noise Gate' : 'Enable Noise Gate'}
           >
             <div className="w-5 h-5 rounded-full bg-white shadow-sm" />
           </button>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          {/* Threshold Slider */}
-          <div className="flex flex-col gap-1.5">
-            <div className="flex items-center justify-between text-xs">
-              <span className="text-slate-400">Noise Threshold:</span>
-              <span className="font-mono text-emerald-400 font-bold">{settings.noiseReduction.thresholdDb} dB</span>
+        {gateFeedback && (
+          <div className="bg-teal-950/60 border border-teal-800/80 p-2.5 rounded-lg text-xs text-teal-300 flex items-center gap-2 animate-fadeIn">
+            <CheckCircle2 className="w-4 h-4 text-teal-400 shrink-0" />
+            <span>{gateFeedback}</span>
+          </div>
+        )}
+
+        {/* Visual Noise Floor & Dynamic Gate Level Meter */}
+        <div className="bg-slate-950/90 rounded-lg p-3 border border-slate-800 flex flex-col gap-2">
+          <div className="flex items-center justify-between text-xs">
+            <div className="flex items-center gap-1.5">
+              <Activity className="w-3.5 h-3.5 text-teal-400" />
+              <span className="font-semibold text-slate-300">Floor Threshold Dynamic Range:</span>
             </div>
-            <input
-              type="range"
-              min="-60"
-              max="-12"
-              step="1"
-              value={settings.noiseReduction.thresholdDb}
-              disabled={!settings.noiseReduction.enabled}
-              onChange={(e) => updateNoiseReduction('thresholdDb', Number(e.target.value))}
-              className="w-full accent-emerald-500 cursor-pointer disabled:opacity-40"
-            />
-            <div className="flex justify-between text-[10px] text-slate-500 font-mono">
-              <span>-60dB (Quiet Room)</span>
-              <span>-12dB (Loud Noise)</span>
+            <div className="flex items-center gap-2 font-mono text-[11px]">
+              {measuredNoiseFloorDb && (
+                <span className="text-slate-400">
+                  Room Floor: <span className="text-amber-400 font-bold">{measuredNoiseFloorDb.floorDb} dB</span>
+                </span>
+              )}
+              <span className="text-teal-400 font-bold">
+                Floor Cutoff: {gateSettings.floorThresholdDb} dB
+              </span>
             </div>
           </div>
 
-          {/* Attenuation / Reduction Depth Slider */}
-          <div className="flex flex-col gap-1.5">
+          {/* Stylized Visual Bar with Threshold Pointer */}
+          <div className="relative w-full h-7 bg-slate-900 rounded-md border border-slate-750 overflow-hidden flex items-center">
+            {/* Visual zones */}
+            {(() => {
+              // Convert dB [-80 .. 0] to percentage [0 .. 100%]
+              const threshPct = Math.max(0, Math.min(100, ((gateSettings.floorThresholdDb - (-80)) / 80) * 100));
+              const floorPct = measuredNoiseFloorDb
+                ? Math.max(0, Math.min(100, ((measuredNoiseFloorDb.floorDb - (-80)) / 80) * 100))
+                : 25;
+
+              return (
+                <>
+                  {/* Gated Zone */}
+                  <div
+                    className="absolute left-0 top-0 bottom-0 bg-red-950/35 border-r-2 border-teal-400 flex items-center justify-start pl-2 transition-all duration-150"
+                    style={{ width: `${threshPct}%` }}
+                  >
+                    <span className="text-[10px] font-mono text-red-300/80 truncate font-semibold">
+                      GATED OUT (MUTED FLOOR)
+                    </span>
+                  </div>
+
+                  {/* Passing Signal Zone */}
+                  <div
+                    className="absolute right-0 top-0 bottom-0 bg-teal-950/30 flex items-center justify-end pr-2 transition-all duration-150"
+                    style={{ left: `${threshPct}%` }}
+                  >
+                    <span className="text-[10px] font-mono text-teal-300/90 truncate font-semibold">
+                      VOICE & SIGNAL (PASSING)
+                    </span>
+                  </div>
+
+                  {/* Measured Floor Marker */}
+                  {measuredNoiseFloorDb && (
+                    <div
+                      className="absolute top-0 bottom-0 w-0.5 bg-amber-400/90 shadow-sm z-10"
+                      style={{ left: `${floorPct}%` }}
+                      title={`Detected Ambient Noise Floor: ${measuredNoiseFloorDb.floorDb} dB`}
+                    >
+                      <div className="absolute -top-1 -translate-x-1/2 w-2 h-2 bg-amber-400 rounded-full" />
+                    </div>
+                  )}
+
+                  {/* Floor Threshold Cursor */}
+                  <div
+                    className="absolute top-0 bottom-0 w-1 bg-teal-400 shadow-md z-20"
+                    style={{ left: `calc(${threshPct}% - 2px)` }}
+                  >
+                    <div className="absolute -bottom-1 -translate-x-1/2 px-1 py-0.2 bg-teal-400 text-slate-950 font-mono text-[9px] font-bold rounded shadow">
+                      {gateSettings.floorThresholdDb}dB
+                    </div>
+                  </div>
+                </>
+              );
+            })()}
+          </div>
+
+          <div className="flex justify-between text-[10px] text-slate-500 font-mono pt-0.5">
+            <span>-80 dB (Deep Silence)</span>
+            <span>-60 dB</span>
+            <span>-40 dB</span>
+            <span>-20 dB</span>
+            <span>0 dB (Clipping)</span>
+          </div>
+        </div>
+
+        {/* Primary Controls Grid */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* 1. Floor Threshold Slider */}
+          <div className="flex flex-col gap-1.5 bg-slate-950/60 p-3 rounded-lg border border-slate-850">
             <div className="flex items-center justify-between text-xs">
-              <span className="text-slate-400">Reduction Depth:</span>
-              <span className="font-mono text-emerald-400 font-bold">{settings.noiseReduction.reductionDb} dB</span>
+              <div className="flex items-center gap-1.5">
+                <span className="font-semibold text-slate-200">Floor Threshold:</span>
+                <span className="text-[11px] text-slate-500">(Eliminate below this)</span>
+              </div>
+              <span className="font-mono text-teal-400 font-bold text-sm">
+                {gateSettings.floorThresholdDb} dB
+              </span>
+            </div>
+            <input
+              type="range"
+              min="-80"
+              max="-12"
+              step="1"
+              value={gateSettings.floorThresholdDb}
+              disabled={!gateSettings.enabled}
+              onChange={(e) => updateNoiseGate('floorThresholdDb', Number(e.target.value))}
+              className="w-full accent-teal-500 cursor-pointer disabled:opacity-40"
+            />
+
+            {/* Quick Threshold Presets */}
+            <div className="flex items-center justify-between gap-1 flex-wrap pt-1">
+              {[
+                { db: -60, label: '-60dB (Quiet)' },
+                { db: -48, label: '-48dB (Clean)' },
+                { db: -42, label: '-42dB (Default)' },
+                { db: -36, label: '-36dB (Fan/AC)' },
+                { db: -28, label: '-28dB (Loud)' }
+              ].map((p) => (
+                <button
+                  key={p.db}
+                  type="button"
+                  disabled={!gateSettings.enabled}
+                  onClick={() => updateNoiseGate('floorThresholdDb', p.db)}
+                  className={`text-[10px] px-2 py-0.5 rounded font-mono transition-colors cursor-pointer border ${
+                    gateSettings.floorThresholdDb === p.db
+                      ? 'bg-teal-950 text-teal-300 border-teal-600 font-bold'
+                      : 'bg-slate-900 text-slate-400 hover:text-slate-200 border-slate-755 disabled:opacity-40'
+                  }`}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+
+            {/* One-Click Auto Detect Floor */}
+            {audioBuffer && (
+              <button
+                type="button"
+                disabled={!gateSettings.enabled}
+                onClick={handleAutoDetectFloorThreshold}
+                className="mt-1.5 w-full py-1.5 px-2.5 bg-teal-950/60 hover:bg-teal-900/80 text-teal-300 border border-teal-800/80 rounded-md text-[11px] font-medium flex items-center justify-center gap-1.5 transition-colors cursor-pointer disabled:opacity-40"
+              >
+                <Zap className="w-3.5 h-3.5 text-amber-400" />
+                <span>Auto-Detect Room Noise Floor</span>
+                {measuredNoiseFloorDb && (
+                  <span className="font-mono text-amber-400 font-bold">
+                    ({measuredNoiseFloorDb.floorDb}dB)
+                  </span>
+                )}
+              </button>
+            )}
+          </div>
+
+          {/* 2. Floor Reduction / Attenuation Depth */}
+          <div className="flex flex-col gap-1.5 bg-slate-950/60 p-3 rounded-lg border border-slate-850">
+            <div className="flex items-center justify-between text-xs">
+              <div className="flex items-center gap-1.5">
+                <span className="font-semibold text-slate-200">Floor Reduction Depth:</span>
+                <span className="text-[11px] text-slate-500">(Attenuation)</span>
+              </div>
+              <span className="font-mono text-teal-400 font-bold text-sm">
+                -{gateSettings.reductionDb} dB
+              </span>
             </div>
             <input
               type="range"
               min="6"
-              max="48"
+              max="80"
               step="2"
-              value={settings.noiseReduction.reductionDb}
-              disabled={!settings.noiseReduction.enabled}
-              onChange={(e) => updateNoiseReduction('reductionDb', Number(e.target.value))}
-              className="w-full accent-emerald-500 cursor-pointer disabled:opacity-40"
+              value={gateSettings.reductionDb}
+              disabled={!gateSettings.enabled}
+              onChange={(e) => updateNoiseGate('reductionDb', Number(e.target.value))}
+              className="w-full accent-teal-500 cursor-pointer disabled:opacity-40"
             />
-            <div className="flex justify-between text-[10px] text-slate-500 font-mono">
-              <span>6dB (Subtle)</span>
-              <span>48dB (Maximum Cut)</span>
+
+            {/* Quick Reduction Presets */}
+            <div className="flex items-center justify-between gap-1 flex-wrap pt-1">
+              {[
+                { db: 18, label: '18dB (Natural)' },
+                { db: 36, label: '36dB (Standard)' },
+                { db: 54, label: '54dB (Heavy)' },
+                { db: 80, label: '80dB (Total Mute)' }
+              ].map((p) => (
+                <button
+                  key={p.db}
+                  type="button"
+                  disabled={!gateSettings.enabled}
+                  onClick={() => updateNoiseGate('reductionDb', p.db)}
+                  className={`text-[10px] px-2 py-0.5 rounded font-mono transition-colors cursor-pointer border ${
+                    gateSettings.reductionDb === p.db
+                      ? 'bg-teal-950 text-teal-300 border-teal-600 font-bold'
+                      : 'bg-slate-900 text-slate-400 hover:text-slate-200 border-slate-755 disabled:opacity-40'
+                  }`}
+                >
+                  {p.label}
+                </button>
+              ))}
             </div>
+
+            <span className="text-[10px] text-slate-500 pt-1">
+              {gateSettings.reductionDb >= 75
+                ? 'Dead silence floor: drops all background noise to zero during pauses.'
+                : 'Smooth floor attenuation: keeps natural room ambience while suppressing loud noise.'}
+            </span>
           </div>
         </div>
 
-        {/* Envelope Attack & Release */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1 border-t border-slate-800/60">
-          <div className="flex flex-col gap-1.5">
+        {/* Envelope Attack, Hold, Release & Anti-Chatter Hysteresis */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2 border-t border-slate-800/60 bg-slate-950/40 p-3 rounded-lg border border-slate-850/80">
+          {/* Attack Time */}
+          <div className="flex flex-col gap-1">
             <div className="flex items-center justify-between text-xs">
-              <span className="text-slate-400">Attack Time:</span>
-              <span className="font-mono text-slate-300">{settings.noiseReduction.attackMs} ms</span>
+              <span className="text-slate-400 text-[11px]">Attack:</span>
+              <span className="font-mono text-slate-200 font-semibold">{gateSettings.attackMs} ms</span>
             </div>
             <input
               type="range"
-              min="1"
+              min="0.5"
               max="40"
-              step="1"
-              value={settings.noiseReduction.attackMs}
-              disabled={!settings.noiseReduction.enabled}
-              onChange={(e) => updateNoiseReduction('attackMs', Number(e.target.value))}
-              className="w-full accent-emerald-500 cursor-pointer disabled:opacity-40"
+              step="0.5"
+              value={gateSettings.attackMs}
+              disabled={!gateSettings.enabled}
+              onChange={(e) => updateNoiseGate('attackMs', Number(e.target.value))}
+              className="w-full accent-teal-500 cursor-pointer disabled:opacity-40"
             />
+            <span className="text-[9px] text-slate-500">Fast gate open</span>
           </div>
 
-          <div className="flex flex-col gap-1.5">
+          {/* Hold Time */}
+          <div className="flex flex-col gap-1">
             <div className="flex items-center justify-between text-xs">
-              <span className="text-slate-400">Release (Fade) Time:</span>
-              <span className="font-mono text-slate-300">{settings.noiseReduction.releaseMs} ms</span>
+              <span className="text-slate-400 text-[11px]">Hold:</span>
+              <span className="font-mono text-teal-400 font-semibold">{gateSettings.holdMs} ms</span>
             </div>
             <input
               type="range"
-              min="30"
-              max="400"
-              step="10"
-              value={settings.noiseReduction.releaseMs}
-              disabled={!settings.noiseReduction.enabled}
-              onChange={(e) => updateNoiseReduction('releaseMs', Number(e.target.value))}
-              className="w-full accent-emerald-500 cursor-pointer disabled:opacity-40"
+              min="0"
+              max="250"
+              step="5"
+              value={gateSettings.holdMs}
+              disabled={!gateSettings.enabled}
+              onChange={(e) => updateNoiseGate('holdMs', Number(e.target.value))}
+              className="w-full accent-teal-500 cursor-pointer disabled:opacity-40"
             />
+            <span className="text-[9px] text-slate-500">Preserves word tails</span>
+          </div>
+
+          {/* Release Time */}
+          <div className="flex flex-col gap-1">
+            <div className="flex items-center justify-between text-xs">
+              <span className="text-slate-400 text-[11px]">Release:</span>
+              <span className="font-mono text-slate-200 font-semibold">{gateSettings.releaseMs} ms</span>
+            </div>
+            <input
+              type="range"
+              min="20"
+              max="500"
+              step="10"
+              value={gateSettings.releaseMs}
+              disabled={!gateSettings.enabled}
+              onChange={(e) => updateNoiseGate('releaseMs', Number(e.target.value))}
+              className="w-full accent-teal-500 cursor-pointer disabled:opacity-40"
+            />
+            <span className="text-[9px] text-slate-500">Smooth decay fade</span>
+          </div>
+
+          {/* Hysteresis */}
+          <div className="flex flex-col gap-1">
+            <div className="flex items-center justify-between text-xs">
+              <span className="text-slate-400 text-[11px]">Hysteresis:</span>
+              <span className="font-mono text-slate-200 font-semibold">{gateSettings.hysteresisDb} dB</span>
+            </div>
+            <input
+              type="range"
+              min="0"
+              max="10"
+              step="1"
+              value={gateSettings.hysteresisDb}
+              disabled={!gateSettings.enabled}
+              onChange={(e) => updateNoiseGate('hysteresisDb', Number(e.target.value))}
+              className="w-full accent-teal-500 cursor-pointer disabled:opacity-40"
+            />
+            <span className="text-[9px] text-slate-500">Anti-chatter offset</span>
           </div>
         </div>
+
+        {/* Audition & Apply Action Bar for Noise Gate */}
+        {(onPreviewNoiseGateToggle || onApplyNoiseGateToEditor) && (
+          <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-800/60 bg-teal-950/20 p-2.5 rounded-lg border border-teal-900/30">
+            <div className="flex items-center gap-2">
+              <Info className="w-3.5 h-3.5 text-teal-400 shrink-0" />
+              <span className="text-[11px] text-teal-200">
+                Audition the noise gate or bake it directly into the active recording waveform
+              </span>
+            </div>
+
+            <div className="flex items-center gap-2">
+              {onPreviewNoiseGateToggle && (
+                <button
+                  type="button"
+                  onClick={onPreviewNoiseGateToggle}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer border ${
+                    isNoiseGatePreviewPlaying
+                      ? 'bg-amber-600 text-white border-amber-500 shadow-md'
+                      : 'bg-teal-600 hover:bg-teal-500 text-white border-teal-500 shadow-sm'
+                  }`}
+                >
+                  {isNoiseGatePreviewPlaying ? (
+                    <Square className="w-3.5 h-3.5" />
+                  ) : (
+                    <Play className="w-3.5 h-3.5" />
+                  )}
+                  <span>{isNoiseGatePreviewPlaying ? 'Stop Audition' : 'Audition Noise Gate'}</span>
+                </button>
+              )}
+
+              {onApplyNoiseGateToEditor && (
+                <button
+                  type="button"
+                  onClick={onApplyNoiseGateToEditor}
+                  disabled={isProcessing}
+                  className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer shadow-sm disabled:opacity-50"
+                  title="Permanently applies noise gate floor to active timeline audio buffer"
+                >
+                  <DoorOpen className="w-3.5 h-3.5" />
+                  <span>Apply Gate to Audio</span>
+                </button>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Module 4: Master Output Make-Up Gain */}

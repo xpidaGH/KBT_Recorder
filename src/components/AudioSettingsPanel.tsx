@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { AudioConfig, AudioFormat, BitDepth } from '../types/recorder';
+import { AudioConfig, AudioFormat, BitDepth, RecordingPreset } from '../types/recorder';
 import { Sliders, Mic, ShieldAlert, Cpu, Radio, Gauge } from 'lucide-react';
+import { RecordingPresetsBar } from './RecordingPresetsBar';
 
 interface AudioSettingsPanelProps {
   config: AudioConfig;
@@ -30,17 +31,40 @@ export const AudioSettingsPanel: React.FC<AudioSettingsPanelProps> = ({
 
   const gainDb = config.gain > 0 ? (20 * Math.log10(config.gain)).toFixed(1) : '-inf';
 
-  return (
-    <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-md flex flex-col gap-4 text-slate-200">
-      <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-        <div className="flex items-center gap-2">
-          <Sliders className="w-4 h-4 text-red-400" />
-          <h2 className="text-sm font-semibold text-slate-100">Pro Audio Hardware & DSP Calibration</h2>
-        </div>
-        <span className="text-xs text-slate-400">RecForge II / Broadcast Engine</span>
-      </div>
+  const handleApplyPreset = (preset: RecordingPreset) => {
+    onChangeConfig({
+      sampleRate: preset.sampleRate,
+      bitDepth: preset.bitDepth,
+      vadEnabled: preset.vadEnabled,
+      vadThreshold: preset.vadThreshold,
+      vadDuration: preset.vadDuration,
+      format: preset.format,
+      channels: preset.channels,
+      gain: preset.gain,
+      agc: preset.agc,
+      gpsTaggingEnabled: preset.gpsTaggingEnabled !== undefined ? preset.gpsTaggingEnabled : config.gpsTaggingEnabled
+    });
+  };
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+  return (
+    <div className="flex flex-col gap-4">
+      {/* Recording Presets Environment Selector */}
+      <RecordingPresetsBar
+        config={config}
+        onApplyPreset={handleApplyPreset}
+        disabled={disabled}
+      />
+
+      <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-md flex flex-col gap-4 text-slate-200">
+        <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+          <div className="flex items-center gap-2">
+            <Sliders className="w-4 h-4 text-red-400" />
+            <h2 className="text-sm font-semibold text-slate-100">Pro Audio Hardware & DSP Calibration</h2>
+          </div>
+          <span className="text-xs text-slate-400">RecForge II / Broadcast Engine</span>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {/* 1. Hardware Input Selector */}
         <div className="flex flex-col gap-1.5">
           <label className="text-xs font-medium text-slate-300 flex items-center gap-1.5">
@@ -253,5 +277,6 @@ export const AudioSettingsPanel: React.FC<AudioSettingsPanelProps> = ({
         </div>
       </div>
     </div>
-  );
+  </div>
+);
 };

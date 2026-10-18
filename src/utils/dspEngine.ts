@@ -20,6 +20,15 @@ export const DEFAULT_DSP_SETTINGS: DSPSettings = {
     attackMs: 10,
     releaseMs: 150
   },
+  noiseGate: {
+    enabled: false,
+    floorThresholdDb: -42,
+    reductionDb: 36,
+    attackMs: 5,
+    holdMs: 40,
+    releaseMs: 150,
+    hysteresisDb: 3
+  },
   spectralSubtraction: {
     enabled: false,
     strengthAlpha: 1.8,
@@ -154,10 +163,161 @@ export const DSP_PRESETS: DSPPreset[] = [
       },
       outputGainDb: 1.5
     }
+  },
+  {
+    id: 'studio_vocal_noise_gate',
+    name: 'Podcast Vocal Noise Gate',
+    description: 'Precision noise gate with -42dB floor threshold, 50ms hold, and 36dB attenuation floor',
+    type: 'noise',
+    settings: {
+      bypassAll: false,
+      noiseGate: {
+        enabled: true,
+        floorThresholdDb: -42,
+        reductionDb: 36,
+        attackMs: 4,
+        holdMs: 50,
+        releaseMs: 160,
+        hysteresisDb: 3
+      },
+      noiseReduction: { enabled: true, thresholdDb: -42, reductionDb: 36, attackMs: 4, releaseMs: 160 }
+    }
+  },
+  {
+    id: 'hard_floor_mute_gate',
+    name: 'Hard Floor Mute Gate (-80dB)',
+    description: 'Complete silence floor for dead quiet pauses during voice recordings and voiceovers',
+    type: 'noise',
+    settings: {
+      bypassAll: false,
+      noiseGate: {
+        enabled: true,
+        floorThresholdDb: -40,
+        reductionDb: 80,
+        attackMs: 2,
+        holdMs: 40,
+        releaseMs: 120,
+        hysteresisDb: 4
+      },
+      noiseReduction: { enabled: true, thresholdDb: -40, reductionDb: 48, attackMs: 2, releaseMs: 120 }
+    }
+  },
+  {
+    id: 'gentle_room_air_gate',
+    name: 'Gentle Room & Air Gate',
+    description: 'Gentle -52dB floor threshold that drops soft air conditioning without choking subtle syllables',
+    type: 'noise',
+    settings: {
+      bypassAll: false,
+      noiseGate: {
+        enabled: true,
+        floorThresholdDb: -52,
+        reductionDb: 22,
+        attackMs: 8,
+        holdMs: 80,
+        releaseMs: 220,
+        hysteresisDb: 2
+      },
+      noiseReduction: { enabled: true, thresholdDb: -52, reductionDb: 22, attackMs: 8, releaseMs: 220 }
+    }
   }
 ];
 
 export { applySpectralSubtraction, captureNoiseProfile, autoEstimateNoiseProfile } from './spectralSubtraction';
+
+/**
+ * Applies a precision Noise Gate with adjustable Floor Threshold (dB),
+ * Floor Reduction depth (dB), Hysteresis, Hold time, and Attack/Release envelope smoothing
+ * to eliminate low-level background noise, room hum, and microphone hiss.
+ */
+export function applyNoiseGateToChannel(
+  channel: Float32Array,
+  sampleRate: number,
+  floorThresholdDb: number, // -80 to -12 dB (floor threshold)
+  reductionDb: number = 36, // 6 to 80 dB attenuation floor
+  attackMs: number = 5, // 0.5 to 50 ms
+  holdMs: number = 50, // 0 to 300 ms
+  releaseMs: number = 150, // 10 to 600 ms
+  hysteresisDb: number = 3 // 0 to 12 dB
+): Float32Array {
+  const output = new Float32Array(channel.length);
+  const windowSize = Math.max(16, Math.floor(sampleRate * 0.005)); // 5ms RMS window for prompt gate response
+  const minGain = Math.pow(10, -Math.abs(reductionDb) / 20); // Floor attenuation (e.g. -40dB -> 0.01)
+
+  const openThresholdLinear = Math.pow(10, floorThresholdDb / 20);
+  const closeThresholdLinear = Math.pow(10, (floorThresholdDb - Math.max(0, hysteresisDb)) / 20);
+
+  const attackCoeff = Math.exp(-1 / (Math.max(0.0005, attackMs / 1000) * sampleRate));
+  const releaseCoeff = Math.exp(-1 / (Math.max(0.005, releaseMs / 1000) * sampleRate));
+  const holdSamples = Math.floor((Math.max(0, holdMs) / 1000) * sampleRate);
+
+  let currentGain = 1.0;
+  let runningSumSq = 0;
+  let gateState: 'OPEN' | 'HOLD' | 'CLOSED' = 'CLOSED';
+  let holdCounter = 0;
+
+  // Prime initial window sum
+  for (let i = 0; i < Math.min(windowSize, channel.length); i++) {
+    runningSumSq += channel[i] * channel[i];
+  }
+
+  for (let i = 0; i < channel.length; i++) {
+    // Sliding RMS calculation
+    const leavingIndex = i - Math.floor(windowSize / 2);
+    const enteringIndex = i + Math.floor(windowSize / 2);
+
+    if (leavingIndex >= 0) {
+      runningSumSq -= channel[leavingIndex] * channel[leavingIndex];
+    }
+    if (enteringIndex < channel.length) {
+      runningSumSq += channel[enteringIndex] * channel[enteringIndex];
+    }
+    if (runningSumSq < 0) runningSumSq = 0;
+
+    const rms = Math.sqrt(runningSumSq / windowSize);
+
+    // Gate state machine with floor threshold & hysteresis
+    if (rms >= openThresholdLinear) {
+      gateState = 'OPEN';
+      holdCounter = holdSamples;
+    } else if (gateState === 'OPEN') {
+      if (rms < closeThresholdLinear) {
+        if (holdCounter > 0) {
+          gateState = 'HOLD';
+          holdCounter--;
+        } else {
+          gateState = 'CLOSED';
+        }
+      }
+    } else if (gateState === 'HOLD') {
+      if (holdCounter > 0) {
+        holdCounter--;
+      } else {
+        gateState = 'CLOSED';
+      }
+    }
+
+    let targetGain = 1.0;
+    if (gateState === 'CLOSED') {
+      targetGain = minGain;
+    } else {
+      targetGain = 1.0;
+    }
+
+    // Apply attack/release smoothing
+    if (targetGain > currentGain) {
+      // Opening gate
+      currentGain = attackCoeff * currentGain + (1 - attackCoeff) * targetGain;
+    } else {
+      // Closing gate
+      currentGain = releaseCoeff * currentGain + (1 - releaseCoeff) * targetGain;
+    }
+
+    output[i] = Math.max(-1, Math.min(1, channel[i] * currentGain));
+  }
+
+  return output;
+}
 
 /**
  * Applies smooth downward noise reduction / gating to Float32Array PCM samples.
@@ -306,11 +466,12 @@ export async function renderDSPAudioBuffer(
   // Render biquad filters + gain
   const renderedBuffer = await offlineCtx.startRendering();
 
-  // 4. Apply Spectral Subtraction and/or Noise Reduction if enabled
+  // 4. Apply Spectral Subtraction and/or Noise Gate / Noise Reduction if enabled
   const needSpectral = settings.spectralSubtraction?.enabled && !settings.bypassAll;
-  const needGate = settings.noiseReduction?.enabled && !settings.bypassAll;
+  const needNoiseGate = settings.noiseGate?.enabled && !settings.bypassAll;
+  const needLegacyReduction = settings.noiseReduction?.enabled && !settings.bypassAll && !needNoiseGate;
 
-  if (needSpectral || needGate) {
+  if (needSpectral || needNoiseGate || needLegacyReduction) {
     const finalBuffer = offlineCtx.createBuffer(numChannels, lengthSamples, sampleRate);
     for (let ch = 0; ch < numChannels; ch++) {
       let channelData: Float32Array<ArrayBufferLike> = renderedBuffer.getChannelData(ch);
@@ -324,8 +485,20 @@ export async function renderDSPAudioBuffer(
         );
       }
 
-      // 4b. Dynamic Noise Reduction / Gate (time-domain envelope gate)
-      if (needGate) {
+      // 4b. Dedicated Precision Noise Gate with Floor Threshold
+      if (needNoiseGate && settings.noiseGate) {
+        channelData = applyNoiseGateToChannel(
+          channelData as any,
+          sampleRate,
+          settings.noiseGate.floorThresholdDb,
+          settings.noiseGate.reductionDb,
+          settings.noiseGate.attackMs,
+          settings.noiseGate.holdMs,
+          settings.noiseGate.releaseMs,
+          settings.noiseGate.hysteresisDb
+        );
+      } else if (needLegacyReduction) {
+        // 4c. Backward-compatible noise reduction / gate
         channelData = applyNoiseReductionToChannel(
           channelData as any,
           sampleRate,
@@ -408,4 +581,74 @@ export function computeFrequencyResponse(
   }
 
   return { combinedDb, hpDb, lpDb };
+}
+
+export interface NormalizationResult {
+  peakLinear: number;
+  peakDb: number;
+  targetPeakDb: number; // -1.0 dB
+  gainFactor: number;
+  gainDb: number;
+}
+
+/**
+ * Calculates peak amplitude across all channels and computes the gain factor
+ * required to normalize the signal to target peak (-1.0 dBFS by default).
+ */
+export function computeNormalizationGain(
+  audioBuffer: AudioBuffer,
+  targetPeakDb: number = -1.0
+): NormalizationResult {
+  const numChannels = audioBuffer.numberOfChannels;
+  const numSamples = audioBuffer.length;
+  let maxPeak = 0;
+
+  for (let ch = 0; ch < numChannels; ch++) {
+    const data = audioBuffer.getChannelData(ch);
+    for (let i = 0; i < numSamples; i++) {
+      const abs = Math.abs(data[i]);
+      if (abs > maxPeak) maxPeak = abs;
+    }
+  }
+
+  const peakLinear = Math.max(1e-7, maxPeak);
+  const peakDb = 20 * Math.log10(peakLinear);
+  const targetLinear = Math.pow(10, targetPeakDb / 20); // ~0.89125 for -1.0 dB
+  const gainFactor = targetLinear / peakLinear;
+  const gainDb = targetPeakDb - peakDb;
+
+  return {
+    peakLinear,
+    peakDb,
+    targetPeakDb,
+    gainFactor,
+    gainDb
+  };
+}
+
+/**
+ * Normalizes an AudioBuffer to target peak (-1.0 dBFS) using Web Audio OfflineAudioContext.
+ */
+export async function normalizeAudioBuffer(
+  audioBuffer: AudioBuffer,
+  targetPeakDb: number = -1.0
+): Promise<{ normalizedBuffer: AudioBuffer; result: NormalizationResult }> {
+  const result = computeNormalizationGain(audioBuffer, targetPeakDb);
+  const sampleRate = audioBuffer.sampleRate;
+  const numChannels = audioBuffer.numberOfChannels;
+  const length = audioBuffer.length;
+
+  const offlineCtx = new OfflineAudioContext(numChannels, length, sampleRate);
+  const source = offlineCtx.createBufferSource();
+  source.buffer = audioBuffer;
+
+  const gainNode = offlineCtx.createGain();
+  gainNode.gain.setValueAtTime(result.gainFactor, 0);
+
+  source.connect(gainNode);
+  gainNode.connect(offlineCtx.destination);
+  source.start(0);
+
+  const normalizedBuffer = await offlineCtx.startRendering();
+  return { normalizedBuffer, result };
 }

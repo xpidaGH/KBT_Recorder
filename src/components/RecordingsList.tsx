@@ -707,10 +707,10 @@ export const RecordingsList: React.FC<RecordingsListProps> = ({
                 )}
 
                 {/* Custom Tags & DSP Chips Display */}
-                {((rec.tags && rec.tags.length > 0) || (rec.dspFilters && !rec.dspFilters.bypassAll && (rec.dspFilters.highPass.enabled || rec.dspFilters.lowPass.enabled || rec.dspFilters.noiseReduction.enabled))) && (
+                {((rec.tags && rec.tags.length > 0) || (rec.dspFilters && !rec.dspFilters.bypassAll && (rec.dspFilters.highPass.enabled || rec.dspFilters.lowPass.enabled || rec.dspFilters.noiseReduction?.enabled || rec.dspFilters.noiseGate?.enabled || rec.dspFilters.spectralSubtraction?.enabled))) && (
                   <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
                     {/* DSP Filter Chain Indicator Pill */}
-                    {rec.dspFilters && !rec.dspFilters.bypassAll && (rec.dspFilters.highPass.enabled || rec.dspFilters.lowPass.enabled || rec.dspFilters.noiseReduction.enabled) && (
+                    {rec.dspFilters && !rec.dspFilters.bypassAll && (rec.dspFilters.highPass.enabled || rec.dspFilters.lowPass.enabled || rec.dspFilters.noiseReduction?.enabled || rec.dspFilters.noiseGate?.enabled || rec.dspFilters.spectralSubtraction?.enabled) && (
                       <span
                         className="inline-flex items-center gap-1 text-[10px] bg-cyan-950/80 text-cyan-300 border border-cyan-800/90 px-2 py-0.5 rounded-md font-mono font-medium shadow-2xs"
                         title="Acoustic DSP filters active"
@@ -719,7 +719,12 @@ export const RecordingsList: React.FC<RecordingsListProps> = ({
                         <span>DSP</span>
                         {rec.dspFilters.highPass.enabled && <span>HP:{rec.dspFilters.highPass.frequency}Hz</span>}
                         {rec.dspFilters.lowPass.enabled && <span>LP:{rec.dspFilters.lowPass.frequency >= 1000 ? `${(rec.dspFilters.lowPass.frequency / 1000).toFixed(1)}k` : `${rec.dspFilters.lowPass.frequency}Hz`}</span>}
-                        {rec.dspFilters.noiseReduction.enabled && <span>NR:{rec.dspFilters.noiseReduction.thresholdDb}dB</span>}
+                        {rec.dspFilters.noiseGate?.enabled ? (
+                          <span>Gate:{rec.dspFilters.noiseGate.floorThresholdDb}dB</span>
+                        ) : (
+                          rec.dspFilters.noiseReduction?.enabled && <span>NR:{rec.dspFilters.noiseReduction.thresholdDb}dB</span>
+                        )}
+                        {rec.dspFilters.spectralSubtraction?.enabled && <span>Spectral</span>}
                       </span>
                     )}
 

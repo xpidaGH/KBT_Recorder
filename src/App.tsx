@@ -382,6 +382,7 @@ export default function App() {
               onResume={handleResumeRecording}
               onStop={handleStopRecording}
               config={config}
+              onChangeConfig={handleChangeConfig}
               recordedBytesEstimate={recordedBytesEstimate}
               liveTranscript={liveTranscript}
               onClearTranscript={() => setLiveTranscript('')}
