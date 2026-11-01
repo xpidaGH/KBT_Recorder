@@ -1,1 +1,274 @@
 @import "tailwindcss";
+
+/* KBT Brand Superellipse Squircle Mask - per kbt-integration-guide.txt */
+@layer utilities {
+  .mask-squircle {
+    mask-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><path fill="black" d="M 0,50 C 0,4 4,0 50,0 C 96,0 100,4 100,50 C 100,96 96,100 50,100 C 4,100 0,96 0,50 Z"/></svg>');
+    mask-size: 100% 100%;
+    mask-repeat: no-repeat;
+    -webkit-mask-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><path fill="black" d="M 0,50 C 0,4 4,0 50,0 C 96,0 100,4 100,50 C 100,96 96,100 50,100 C 4,100 0,96 0,50 Z"/></svg>');
+    -webkit-mask-size: 100% 100%;
+    -webkit-mask-repeat: no-repeat;
+  }
+}
+
+/* ==========================================================================
+   KBT_Recorder 5 Dynamic UI Themes CSS Variable Definitions
+   ========================================================================== */
+
+:root {
+  --app-bg: #090d16;
+  --app-header-bg: #0b1120;
+  --app-card-bg: #111827;
+  --app-subcard-bg: #0a0f1d;
+  --app-border: #1e293b;
+  --app-border-subtle: #151e2e;
+  --app-text: #f8fafc;
+  --app-text-muted: #94a3b8;
+  --app-text-dim: #64748b;
+  --app-accent: #ef4444;
+  --app-accent-hover: #dc2626;
+  --app-accent-subtle: rgba(239, 68, 68, 0.15);
+  --app-kbt-brand: #a3e635;
+  --app-font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  --app-radius-card: 1rem;
+  --app-radius-btn: 0.5rem;
+}
+
+/* 1. Theme: Editorial & Refined */
+[data-theme="editorial"] {
+  --app-bg: #faf8f5;
+  --app-header-bg: #f4ede4;
+  --app-card-bg: #ffffff;
+  --app-subcard-bg: #f8f4ed;
+  --app-border: #e6ddd2;
+  --app-border-subtle: #ede5dc;
+  --app-text: #1c1917;
+  --app-text-muted: #57534e;
+  --app-text-dim: #78716c;
+  --app-accent: #991b1b;
+  --app-accent-hover: #7f1d1d;
+  --app-accent-subtle: rgba(153, 27, 27, 0.12);
+  --app-kbt-brand: #65a30d;
+  --app-font-family: 'Newsreader', Georgia, Cambria, 'Times New Roman', serif;
+  --app-radius-card: 0.5rem;
+  --app-radius-btn: 0.375rem;
+}
+
+[data-theme="editorial"] body,
+[data-theme="editorial"] .theme-root {
+  background-color: var(--app-bg) !important;
+  color: var(--app-text) !important;
+  font-family: var(--app-font-family) !important;
+}
+
+[data-theme="editorial"] header {
+  background-color: var(--app-header-bg) !important;
+  border-color: var(--app-border) !important;
+  color: var(--app-text) !important;
+}
+
+[data-theme="editorial"] .bg-slate-900,
+[data-theme="editorial"] .bg-slate-950 {
+  background-color: #ffffff !important;
+  border-color: #e6ddd2 !important;
+  color: #1c1917 !important;
+}
+
+[data-theme="editorial"] .bg-slate-800 {
+  background-color: #f7f3ec !important;
+  border-color: #e6ddd2 !important;
+  color: #1c1917 !important;
+}
+
+[data-theme="editorial"] .text-white {
+  color: #1c1917 !important;
+}
+
+[data-theme="editorial"] .text-slate-200,
+[data-theme="editorial"] .text-slate-300 {
+  color: #292524 !important;
+}
+
+[data-theme="editorial"] .text-slate-400 {
+  color: #57534e !important;
+}
+
+[data-theme="editorial"] .text-slate-500 {
+  color: #78716c !important;
+}
+
+[data-theme="editorial"] .border-slate-800,
+[data-theme="editorial"] .border-slate-700 {
+  border-color: #e6ddd2 !important;
+}
+
+/* 2. Theme: Technical & Systematic */
+[data-theme="technical"] {
+  --app-bg: #070b10;
+  --app-header-bg: #0c1117;
+  --app-card-bg: #0f1722;
+  --app-subcard-bg: #080d14;
+  --app-border: #1f2c3d;
+  --app-border-subtle: #182332;
+  --app-text: #00ff66;
+  --app-text-muted: #5eead4;
+  --app-text-dim: #38bdf8;
+  --app-accent: #00ff66;
+  --app-accent-hover: #10b981;
+  --app-accent-subtle: rgba(0, 255, 102, 0.15);
+  --app-kbt-brand: #00ff66;
+  --app-font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', Consolas, monospace;
+  --app-radius-card: 0.125rem;
+  --app-radius-btn: 0.125rem;
+}
+
+[data-theme="technical"] body,
+[data-theme="technical"] .theme-root {
+  background-color: var(--app-bg) !important;
+  font-family: var(--app-font-family) !important;
+}
+
+[data-theme="technical"] .border-slate-800,
+[data-theme="technical"] .border-slate-700 {
+  border-color: #1f3347 !important;
+}
+
+[data-theme="technical"] button,
+[data-theme="technical"] div {
+  border-radius: var(--app-radius-card);
+}
+
+/* 3. Theme: Warm & Approachable */
+[data-theme="warm"] {
+  --app-bg: #fdf8f4;
+  --app-header-bg: #f7ede2;
+  --app-card-bg: #ffffff;
+  --app-subcard-bg: #faefe6;
+  --app-border: #ebd9cf;
+  --app-border-subtle: #f2e4dc;
+  --app-text: #3d2b27;
+  --app-text-muted: #6d5954;
+  --app-text-dim: #9d8882;
+  --app-accent: #e07a5f;
+  --app-accent-hover: #d6684d;
+  --app-accent-subtle: rgba(224, 122, 95, 0.16);
+  --app-kbt-brand: #65a30d;
+  --app-font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --app-radius-card: 1.25rem;
+  --app-radius-btn: 9999px;
+}
+
+[data-theme="warm"] body,
+[data-theme="warm"] .theme-root {
+  background-color: var(--app-bg) !important;
+  color: var(--app-text) !important;
+}
+
+[data-theme="warm"] header {
+  background-color: var(--app-header-bg) !important;
+  border-color: var(--app-border) !important;
+  color: var(--app-text) !important;
+}
+
+[data-theme="warm"] .bg-slate-900,
+[data-theme="warm"] .bg-slate-950 {
+  background-color: #ffffff !important;
+  border-color: #ebd9cf !important;
+  color: #3d2b27 !important;
+  border-radius: var(--app-radius-card);
+}
+
+[data-theme="warm"] .bg-slate-800 {
+  background-color: #faefe6 !important;
+  border-color: #ebd9cf !important;
+  color: #3d2b27 !important;
+}
+
+[data-theme="warm"] .text-white {
+  color: #3d2b27 !important;
+}
+
+[data-theme="warm"] .text-slate-200,
+[data-theme="warm"] .text-slate-300 {
+  color: #4a3834 !important;
+}
+
+[data-theme="warm"] .text-slate-400 {
+  color: #6d5954 !important;
+}
+
+[data-theme="warm"] .text-slate-500 {
+  color: #9d8882 !important;
+}
+
+[data-theme="warm"] .border-slate-800,
+[data-theme="warm"] .border-slate-700 {
+  border-color: #ebd9cf !important;
+}
+
+/* 4. Theme: Elegant Dark (Default Studio) */
+[data-theme="dark"] {
+  --app-bg: #090d16;
+  --app-header-bg: #0b1120;
+  --app-card-bg: #111827;
+  --app-subcard-bg: #0a0f1d;
+  --app-border: #1e293b;
+  --app-border-subtle: #151e2e;
+  --app-text: #f8fafc;
+  --app-text-muted: #94a3b8;
+  --app-text-dim: #64748b;
+  --app-accent: #ef4444;
+  --app-accent-hover: #dc2626;
+  --app-accent-subtle: rgba(239, 68, 68, 0.15);
+  --app-kbt-brand: #a3e635;
+  --app-font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  --app-radius-card: 1rem;
+  --app-radius-btn: 0.5rem;
+}
+
+/* 5. Theme: Vibrant Palette */
+[data-theme="vibrant"] {
+  --app-bg: #0b001a;
+  --app-header-bg: #14022e;
+  --app-card-bg: #1c053d;
+  --app-subcard-bg: #13032b;
+  --app-border: #581c87;
+  --app-border-subtle: #3b0764;
+  --app-text: #ffffff;
+  --app-text-muted: #e9d5ff;
+  --app-text-dim: #c084fc;
+  --app-accent: #d946ef;
+  --app-accent-hover: #c026d3;
+  --app-accent-subtle: rgba(217, 70, 239, 0.22);
+  --app-kbt-brand: #facc15;
+  --app-font-family: system-ui, -apple-system, sans-serif;
+  --app-radius-card: 0.875rem;
+  --app-radius-btn: 0.5rem;
+}
+
+[data-theme="vibrant"] body,
+[data-theme="vibrant"] .theme-root {
+  background-color: var(--app-bg) !important;
+}
+
+[data-theme="vibrant"] header {
+  background-color: var(--app-header-bg) !important;
+  border-color: var(--app-border) !important;
+}
+
+[data-theme="vibrant"] .bg-slate-900,
+[data-theme="vibrant"] .bg-slate-950 {
+  background-color: #1a0438 !important;
+  border-color: #581c87 !important;
+}
+
+[data-theme="vibrant"] .bg-slate-800 {
+  background-color: #26074f !important;
+  border-color: #6b21a8 !important;
+}
+
+[data-theme="vibrant"] .border-slate-800,
+[data-theme="vibrant"] .border-slate-700 {
+  border-color: #581c87 !important;
+}

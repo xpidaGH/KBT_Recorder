@@ -31,6 +31,9 @@ import { CapstoneExplorer } from './components/CapstoneExplorer';
 import { CloudHubView } from './components/CloudHubView';
 import { GeminiAnalysisModal } from './components/GeminiAnalysisModal';
 import { LocationDetailsModal } from './components/LocationDetailsModal';
+import { ThemeModal } from './components/ThemeModal';
+import { ThemeId } from './types/theme';
+import { applyTheme, initTheme } from './utils/themeManager';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<'studio' | 'library' | 'capstone' | 'clouds'>('studio');
@@ -67,6 +70,10 @@ export default function App() {
     isSpeaking: false
   });
 
+  // Theme State
+  const [currentTheme, setCurrentTheme] = useState<ThemeId>('dark');
+  const [isThemeModalOpen, setIsThemeModalOpen] = useState(false);
+
   // Modals state
   const [isUserGuideOpen, setIsUserGuideOpen] = useState(false);
   const [isInstallOpen, setIsInstallOpen] = useState(false);
@@ -77,6 +84,17 @@ export default function App() {
   const [cryptoModalItem, setCryptoModalItem] = useState<RecordingItem | null>(null);
   const [geminiModalItem, setGeminiModalItem] = useState<RecordingItem | null>(null);
   const [locationModalItem, setLocationModalItem] = useState<RecordingItem | null>(null);
+
+  // Initialize theme on mount
+  useEffect(() => {
+    const loadedTheme = initTheme();
+    setCurrentTheme(loadedTheme);
+  }, []);
+
+  const handleSelectTheme = (themeId: ThemeId) => {
+    applyTheme(themeId);
+    setCurrentTheme(themeId);
+  };
 
   // References
   const audioEngineRef = useRef<ProAudioEngine | null>(null);
@@ -357,7 +375,9 @@ export default function App() {
         setActiveTab={setActiveTab}
         onOpenUserGuide={() => setIsUserGuideOpen(true)}
         onOpenInstallation={() => setIsInstallOpen(true)}
+        onOpenThemeSettings={() => setIsThemeModalOpen(true)}
         recordingCount={recordings.length}
+        currentTheme={currentTheme}
       />
 
       {/* Main Content Viewport */}
@@ -535,6 +555,13 @@ export default function App() {
       <LocationDetailsModal
         item={locationModalItem}
         onClose={() => setLocationModalItem(null)}
+      />
+
+      <ThemeModal
+        isOpen={isThemeModalOpen}
+        onClose={() => setIsThemeModalOpen(false)}
+        currentTheme={currentTheme}
+        onSelectTheme={handleSelectTheme}
       />
 
       {/* Footer */}
